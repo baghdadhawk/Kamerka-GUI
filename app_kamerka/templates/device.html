@@ -303,6 +303,30 @@
                         </div>
                         </div>
 
+                        <div class="row">
+                        <div class="col-md-4">
+
+                            <!-- START USERS ACTIVITY BLOCK -->
+                            <div class="panel panel-default">
+                                <div class="panel-heading ui-draggable-handle">
+                                    <div class="panel-title-box">
+                                        <h3>MISP Events</h3>
+                                    </div>
+
+                                </div>
+                                <div class="panel-body padding-0">
+                                    <button type="button" id="misp_scan" class="btn btn-primary active">Scan</button>
+                                                                        <button type="button" id="misp_show" class="btn btn-primary active">Display</button>
+                                    <div id="misp_results" class="contact-info" style="display: none;"></div>
+                                    <progress id="progress-bar9" value="0" max="100" style="display:none; margin-bottom: 1em;"></progress>
+
+                                </div>
+                            </div>
+                            <!-- END USERS ACTIVITY BLOCK -->
+
+                        </div>
+                        </div>
+
 
 
 
@@ -816,6 +840,28 @@ $('#whois_scan').on('click', function(){
         return false;
     });
 
+    var pgrbar9 = $('#progress-bar9');
+    $('#misp_scan').on('click', function(){
+       $.ajax({
+        type: "GET",
+        url: "/misp_scan/{{device.id}}",
+        success: function (data) {
+
+
+                if (data.task_id != null) {
+                    get_task_info(data.task_id,pgrbar9);
+                }
+                else if (data.Error){
+                noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 1000});
+                }
+            },
+            error: function (data) {
+                console.log("Something went wrong!");
+            }
+        });
+        return false;
+    });
+
 
 $('#scan').on('click', function(){
        $.ajax({
@@ -914,6 +960,36 @@ if (x.style.display === "none") {
               $("#whois_results").append("<p><b>" + fieldname + ' </b><br> ' + field +"</p>");
 }
             });
+
+              }
+              )
+            }}
+        })
+        }
+  });
+
+
+$('#misp_show').on('click', function(){
+var x = document.getElementById("misp_results");
+if (x.style.display === "none") {
+    x.style.display = "block";
+  } else {
+    x.style.display = "none";
+  } if(x.innerHTML == ""){
+        $.ajax({
+            url: "/get_misp_results/{{device.id}}",
+            type: "get",
+            success: function(response) {
+            if (response.length==0) {
+                            noty({text: "No records" , layout: 'topRight', type: 'error', timeout: 1000});
+}
+            else {
+            $.each(response, function(key, val) {
+              $.each(val.fields, function(fieldname, field) {
+                 if (fieldname=="device"){ {} } else {
+                 $("#misp_results").append("<p><b>" + fieldname + ' </b><br> ' + field + " </p>");
+}
+            }  );$("#misp_results").append('------------------');
 
               }
               )

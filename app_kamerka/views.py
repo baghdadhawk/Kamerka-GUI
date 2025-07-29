@@ -14,10 +14,10 @@ from django.shortcuts import render
 
 from app_kamerka import forms
 from app_kamerka.models import Search, Device, DeviceNearby, FlickrNearby, ShodanScan, BinaryEdgeScore, Whois, \
-    TwitterNearby, Bosch
+    TwitterNearby, Bosch, MispEvent
 from kamerka.tasks import shodan_search, devices_nearby, twitter_nearby_task, flickr, shodan_scan_task, \
     binary_edge_scan, whoisxml, check_credits, send_to_field_agent_task, nmap_scan, validate_nmap, validate_maxmind, scan, \
-    exploit
+    exploit, misp_enrich
 
 
 # Create your views here.
@@ -640,4 +640,23 @@ def get_whois(request, id):
 
         response_data = serializers.serialize('json', whoiss)
 
+        return HttpResponse(response_data, content_type="application/json")
+
+
+def misp_scan(request, id):
+    if request.is_ajax() and request.method == 'GET':
+        events = MispEvent.objects.filter(device_id=id)
+        if events:
+            return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
+
+        task = misp_enrich.delay(id=id)
+        return HttpResponse(json.dumps({'task_id': task.id}), content_type='application/json')
+    else:
+        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
+
+
+def get_misp_results(request, id):
+    if request.is_ajax() and request.method == 'GET':
+        events = MispEvent.objects.filter(device_id=id)
+        response_data = serializers.serialize('json', events)
         return HttpResponse(response_data, content_type="application/json")

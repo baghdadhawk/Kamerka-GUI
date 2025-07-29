@@ -100,3 +100,11 @@ class Dnp3(models.Model):
     destination = models.CharField(max_length=100)
     control = models.CharField(max_length=100)
 
+
+class MispEvent(models.Model):
+    device = models.ForeignKey(Device, on_delete=models.CASCADE)
+    event_id = models.CharField(max_length=100)
+    info = models.CharField(max_length=500)
+    tags = models.CharField(max_length=500)
+    attributes = JSONField()
+

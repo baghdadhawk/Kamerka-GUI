@@ -12,6 +12,8 @@
     "twitter_consumer_secret": "TWITTER_KEY",
     "pastebin_user": "PASTEBIN_USER",
     "pastebin_password": "PASTEBIN_PASSWORD",
-    "pastebin_dev_key": "PASTEBIN_DEVELOPER_KEY"
+    "pastebin_dev_key": "PASTEBIN_DEVELOPER_KEY",
+    "misp_url": "MISP_URL",
+    "misp_key": "MISP_KEY"
   }
 }

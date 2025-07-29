@@ -38,5 +38,7 @@ urlpatterns = [
     path('get_whois/<id>', views.get_whois, name="get_whois"),
     path('scan/<id>', views.scan_dev, name="scan"),
     path('exploit/<id>', views.exploit_dev, name="exploit"),
+    path('misp_scan/<id>', views.misp_scan, name='misp_scan'),
+    path('get_misp_results/<id>', views.get_misp_results, name='get_misp_results'),
     # path('show_bosch_usernames/<id>', views.show_bosch_usernames, name="show_bosch_usernames"),
 ]
