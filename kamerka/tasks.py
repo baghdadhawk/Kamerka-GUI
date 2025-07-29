@@ -30,7 +30,7 @@ import xml.etree.ElementTree as et
 from app_kamerka import exploits
 
 from app_kamerka.models import Device, DeviceNearby, Search, TwitterNearby, FlickrNearby, ShodanScan, BinaryEdgeScore, \
-    Whois, Bosch
+    Whois, Bosch, MispEvent
 
 healthcare_queries = {"zoll": "http.favicon.hash:-236942626",
                       'dicom': "dicom",
@@ -1257,7 +1257,39 @@ def whoisxml(id):
                    admin_email=admin_email,
                    admin_phone=admin_phone, netrange=netrange, name=name, email=email)
 
-        wh.save()
+       wh.save()
+
+
+@shared_task(bind=False)
+def misp_enrich(id):
+    misp_url = keys['keys'].get('misp_url')
+    misp_key = keys['keys'].get('misp_key')
+    if not misp_url or not misp_key:
+        return {'Error': 'MISP not configured'}
+
+    device = Device.objects.get(id=id)
+    search_url = misp_url.rstrip('/') + '/attributes/restSearch'
+    headers = {'Authorization': misp_key, 'Accept': 'application/json'}
+    body = {'returnFormat': 'json', 'value': device.ip}
+
+    try:
+        response = requests.post(search_url, json=body, headers=headers, timeout=10)
+        data = response.json()
+    except Exception as e:
+        return {'Error': str(e)}
+
+    if 'response' not in data:
+        return {'Error': 'No results'}
+
+    for event in data['response']:
+        event_info = event.get('Event', {})
+        event_id = event_info.get('id', '')
+        info = event_info.get('info', '')
+        tags = ','.join(t['name'] for t in event_info.get('Tag', []))
+        attributes = event_info.get('Attribute', [])
+        MispEvent.objects.create(device=device, event_id=event_id, info=info, tags=tags, attributes=attributes)
+
+    return {'Success': True}
 
 
     elif 'subRecords' in req_json['WhoisRecord']:

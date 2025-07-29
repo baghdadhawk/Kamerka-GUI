@@ -13,5 +13,6 @@ bs4
 pynmea2
 maxminddb
 xmltodict
+pymisp
 python-libnmap
 lxml
