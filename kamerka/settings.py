@@ -12,19 +12,48 @@ https://docs.djangoproject.com/en/2.2/ref/settings/
 
 import os
 
+from django.core.management.utils import get_random_secret_key
+
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _env_bool(name, default=False):
+    return os.environ.get(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/2.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'y8bbfvj#b7a%)t_tu28#tzvfhk_s)o_-oqkgch7^z00us)&qh@'
+# Set DJANGO_SECRET_KEY in the environment for a stable key. When it is not set
+# a random key is generated at startup (sessions will not persist across
+# restarts), which keeps the previously hardcoded key out of source control.
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY') or get_random_secret_key()
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Off by default; set DJANGO_DEBUG=1 in the environment for local development.
+DEBUG = _env_bool('DJANGO_DEBUG', False)
 
-ALLOWED_HOSTS = []
+# Comma-separated list of allowed hosts, e.g. "example.com,www.example.com".
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
+]
+
+# Where unauthenticated users are redirected. The Django admin login is used
+# since the project already enables the admin app.
+LOGIN_URL = '/admin/login/'
+
+# Extra hardening that is only safe to enable once the app is served over HTTPS
+# behind a real host, i.e. when DEBUG is off.
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_BROWSER_XSS_FILTER = True
+    X_FRAME_OPTIONS = 'DENY'
 
 # CELERY STUFF
 BROKER_URL = 'redis://localhost:6379'
@@ -53,10 +82,12 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    # 'django.middleware.csrf.CsrfViewMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    # Requires authentication for all application views (see app_kamerka/middleware.py).
+    'app_kamerka.middleware.LoginRequiredMiddleware',
 ]
 
 ROOT_URLCONF = 'kamerka.urls'

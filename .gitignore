@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Django
+db.sqlite3
+db.sqlite3-journal
+/media/
+/scans/
+/static_root/
+*.log
+
+# Local secrets / API keys (use keys.json.example as a template)
+keys.json
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
