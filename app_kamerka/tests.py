@@ -1,9 +1,12 @@
+from unittest import mock
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase, Client
 from django.urls import reverse
 
 from app_kamerka.models import Device, Search
 from app_kamerka.views import is_ajax
+from kamerka import tasks
 
 User = get_user_model()
 
@@ -128,6 +131,79 @@ class ShodanScanResultsTests(TestCase):
     def test_non_ajax_is_400(self):
         response = self.client.get(reverse('get_shodan_scan_results', args=[self.device.id]))
         self.assertEqual(response.status_code, 400)
+
+
+class SearchEstimateViewTests(TestCase):
+    """The free (zero query-credit) estimate endpoint: it must use
+    kamerka.tasks.count_devices (api.count) and never touch api.search."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.client.force_login(self.user)
+
+    def _patch_shodan(self, count_fn):
+        search_calls = []
+
+        class FakeShodanClient:
+            def __init__(self, api_key):
+                pass
+
+            def search(self, query, page=1):
+                search_calls.append((query, page))
+                raise AssertionError('search_estimate must never call api.search')
+
+            def count(self, query):
+                return count_fn(query)
+
+        patcher = mock.patch.object(tasks, 'Shodan', FakeShodanClient)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return search_calls
+
+    def test_non_ajax_is_not_ok(self):
+        response = self.client.get(reverse('search_estimate'), {'country': 'US', 'ics': 'niagara'})
+        self.assertContains(response, 'NO OK')
+
+    def test_missing_params_is_400(self):
+        response = self.client.get(reverse('search_estimate'), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 400)
+
+    def test_returns_per_family_and_total_counts_without_search(self):
+        def count_fn(query):
+            if 'Niagara' in query:
+                return {'total': 7}
+            return {'total': 3}
+
+        search_calls = self._patch_shodan(count_fn)
+
+        response = self.client.get(
+            reverse('search_estimate'),
+            {'country': 'US', 'ics': ['niagara', 'dnp3']},
+            **AJAX_HEADER,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['counts']['niagara'], 7)
+        self.assertEqual(data['counts']['dnp3'], 3)
+        self.assertEqual(data['total'], 10)
+        self.assertEqual(search_calls, [])
+
+    def test_all_families_sentinel_is_expanded(self):
+        def count_fn(query):
+            return {'total': 1}
+
+        self._patch_shodan(count_fn)
+
+        response = self.client.get(
+            reverse('search_estimate'),
+            {'country': 'US', 'ics': '__all__'},
+            **AJAX_HEADER,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data['counts']), len(tasks.ics_queries))
 
 
 class ModelSmokeTests(TestCase):

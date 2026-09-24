@@ -171,3 +171,81 @@
   a correctness risk that needs to be validated against live Shodan data,
   which this sandbox does not have access to. Left as a future option for
   someone who can verify it against real query results.
+
+## Opt-in port-grouping optimization (implemented)
+
+The port-grouping idea flagged above as a deferred optimization is now
+implemented, as an **opt-in, curated** version of it, addressing the
+correctness risk that previously blocked it: rather than grouping every
+`port:`-based ICS family, only a small hand-picked allowlist is grouped,
+chosen specifically so port -> family classification is unambiguous.
+
+- **Default is unchanged.** `shodan_search(..., group_ports=False)` (the
+  default, both as a Python default and as the checkbox's unchecked state
+  in the UI) runs exactly the same one-`api.search`-call-per-family loop as
+  before this change — byte-for-byte identical behavior, locked in by
+  `ShodanSearchGroupPortsDefaultBehaviorTests` in `kamerka/tests.py`.
+- **What `group_ports=True` does.** `kamerka/tasks.py` now has a hardcoded
+  `GROUPABLE_PORT_FAMILIES` map (family key -> list of ports) and its
+  reverse, `_PORT_TO_FAMILY` (port -> family key). `partition_groupable()`
+  splits a `build_family_selection()` result into the selected ICS families
+  that are in that map ("groupable") and everything else ("rest":
+  healthcare, infra, and any ICS family not in the allowlist). When
+  `group_ports=True` and `country` is set, `shodan_search` runs the
+  groupable families as **one** combined
+  `country:XX port:<all their ports, sorted, deduped>` search
+  (`shodan_search_worker_grouped`), classifies each returned match back to
+  its family purely by its `port` field via `_PORT_TO_FAMILY`, and saves it
+  with that family's own `(search_type, category)` — then runs `rest`
+  individually exactly as before. For a run selecting all 11 curated
+  families, this turns 11 `api.search` calls into 1.
+- **The curated allowlist and why these ports specifically:**
+  `niagara` (1911, 4911), `dnp3` (20000), `hart` (5094), `pcworx` (1962),
+  `iec` (2404), `proconos` (20547), `omron` (9600), `redlion` (789),
+  `mitsubishi` (5006, 5007), `gestrip` (18245, 18246), `doors` (4070).
+  Every port in this map belongs to **exactly one** family (even
+  `niagara`'s two ports and `mitsubishi`'s/`gestrip`'s two ports each only
+  ever map back to their own family), so a match's port unambiguously
+  identifies its family — no content-based disambiguation is needed, unlike
+  the general case the earlier deferred-optimization note worried about.
+  Two categories of `ics_queries` ports were deliberately **excluded**
+  from the map even though they are `port:`-based: (1) noisy shared ports
+  like `tank` (`port:10001`) and `total_access` (`port:2000`), which are
+  common/generic enough on those ports that folding them into the combined
+  query would risk pulling in unrelated devices under the wrong family; and
+  (2) families whose query isn't fundamentally a port filter (`bacnet`,
+  `modbus`, `siemens`, `ethernetip`, `codesys`, etc. — these key off
+  banner/string content, not a dedicated port), which stay in `rest` and
+  are still searched individually regardless of `group_ports`.
+- **Accepted trade-off.** The combined query for a grouped family only
+  keeps `port:<n>`, dropping that family's own `product:`/string
+  sub-filter (e.g. `niagara`'s `product:Niagara`, `pcworx`'s `PLC`). This
+  can very slightly over-include devices that happen to listen on the same
+  port without actually being that product. This was accepted deliberately
+  for the families on the allowlist, since their ports are protocol-
+  specific enough (assigned to that one ICS protocol) that the extra noise
+  from dropping the sub-filter is expected to be small; it is exactly why
+  the noisier shared ports (`tank`, `total_access`) were excluded instead
+  of included with the same trade-off.
+- **Free result-count preview (`api.count`, zero query credits).**
+  `count_devices(country, query)` wraps Shodan's `api.count()` (unlike
+  `api.search()`, `api.count()` never spends a query credit), and the new
+  AJAX view `search_estimate` (`GET /search_estimate?country=..&ics=..&ics=..`,
+  wired in `app_kamerka/urls.py`) uses it to return a per-family and total
+  estimated device count for the currently-selected country + ICS families
+  **without** running an actual paid search. The ICS tab in
+  `search_main.html` has a "group protocol ports (fewer API calls)"
+  checkbox (`name="group_ports"`, read in `views.search_main`'s ICS branch
+  and passed through to `shodan_search.delay(...)`) and an
+  "Estimate results (free)" button next to it that calls this endpoint and
+  shows the total inline, so a user can sanity-check roughly how many
+  results a search/credit spend will return before committing to it.
+- **Needs live-Shodan verification.** All of the above (the grouped query
+  shape, `_PORT_TO_FAMILY` classification, and `api.count()`'s query
+  syntax/response shape) is covered by tests against a mocked Shodan client
+  only, since this sandbox has no live Shodan access. Before relying on
+  `group_ports=True` for a real run, spot-check it against live Shodan: run
+  a small `group_ports=True` search and confirm (a) the combined
+  `port:a,b,c,...` query is accepted, (b) matches land under the expected
+  family, and (c) `api.count()` numbers are in the right ballpark versus an
+  equivalent `api.search()` run's `total`.

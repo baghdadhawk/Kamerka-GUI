@@ -541,6 +541,63 @@ def build_family_selection(ics=None, healthcare=None, infra=None):
     return selection
 
 
+# --- Opt-in port-grouping optimization (query-credit saver) ---------------
+#
+# Curated allowlist of ICS families that are identified by a protocol-specific
+# port. Every port below belongs to exactly one family in this map, so a
+# returned Shodan match's `port` unambiguously identifies which family it
+# belongs to. This lets several of these families be searched together as one
+# combined `port:a,b,c,...` query instead of one `api.search` call per family,
+# cutting query credits from N down to 1 for the families involved.
+#
+# This is deliberately a short, hand-picked subset of ics_queries: the ports
+# here are specific enough to their protocol that dropping the per-family
+# product/string sub-filter (e.g. "product:Niagara") adds little noise. Noisy
+# shared ports used by other ICS families (e.g. tank=10001, total_access=2000)
+# are intentionally left out, since collapsing those would over-include
+# unrelated devices that merely share the port.
+GROUPABLE_PORT_FAMILIES = {
+    "niagara": [1911, 4911],
+    "dnp3": [20000],
+    "hart": [5094],
+    "pcworx": [1962],
+    "iec": [2404],
+    "proconos": [20547],
+    "omron": [9600],
+    "redlion": [789],
+    "mitsubishi": [5006, 5007],
+    "gestrip": [18245, 18246],
+    "doors": [4070],
+}
+
+# Reverse lookup: port -> family key, derived from GROUPABLE_PORT_FAMILIES.
+# Safe because every port above belongs to exactly one family.
+_PORT_TO_FAMILY = {
+    port: family for family, ports in GROUPABLE_PORT_FAMILIES.items() for port in ports
+}
+
+
+def partition_groupable(selection):
+    """Split a build_family_selection() result into (groupable, rest).
+
+    `groupable` holds the (key, query, category) tuples whose category is
+    "ics" and whose key is in GROUPABLE_PORT_FAMILIES (candidates for the
+    combined port search). `rest` holds everything else (healthcare, infra,
+    and any ICS family not in the curated allowlist), unchanged and in the
+    same relative order as in `selection`.
+
+    Pure function, no I/O, so it is unit-testable on its own.
+    """
+    groupable = []
+    rest = []
+    for key, query, category in selection:
+        if category == "ics" and key in GROUPABLE_PORT_FAMILIES:
+            groupable.append((key, query, category))
+        else:
+            rest.append((key, query, category))
+    return groupable, rest
+
+
 # API keys are read from a JSON file resolved relative to the project root
 # (or from the path in the KAMERKA_KEYS_FILE environment variable), so the
 # location no longer depends on the current working directory.
@@ -605,7 +662,7 @@ def devices_nearby(lat, lon, id, query):
 
 @shared_task(bind=True)
 def shodan_search(self, fk, country=None, coordinates=None, ics=None, healthcare=None, coordinates_search=None,
-                  all_results=False, infra=None, max_pages=None):
+                  all_results=False, infra=None, max_pages=None, group_ports=False):
     """Run a Shodan search for one Search row.
 
     `ics`, `healthcare` and `infra` are each an optional list of family keys
@@ -626,6 +683,16 @@ def shodan_search(self, fk, country=None, coordinates=None, ics=None, healthcare
     selections end up resolving to the exact same query, Shodan is only
     queried once and the cached matches are reused to create Device rows for
     both.
+
+    `group_ports` is an OPT-IN optimization, default off. When True (and
+    `country` is set), any selected ICS families that are in the curated
+    GROUPABLE_PORT_FAMILIES allowlist are pulled out of the per-family loop
+    and searched together in a single combined `port:...` query instead of
+    one `api.search` call each (see partition_groupable/
+    shodan_search_worker_grouped). Every other selected family (healthcare,
+    infra, and any ICS family not in the allowlist) is still searched
+    individually exactly as before. When group_ports is False (the default),
+    behavior is byte-for-byte identical to before this option existed.
     """
     progress_recorder = ProgressRecorder(self)
     result = 0
@@ -633,8 +700,29 @@ def shodan_search(self, fk, country=None, coordinates=None, ics=None, healthcare
 
     if country:
         selection = build_family_selection(ics=ics, healthcare=healthcare, infra=infra)
-        total = len(selection)
-        for c, (key, query, category) in enumerate(selection):
+
+        if group_ports:
+            groupable, rest = partition_groupable(selection)
+        else:
+            groupable, rest = [], selection
+
+        # The grouped search (if any) counts as a single progress step,
+        # alongside one step per individually-searched family in `rest`.
+        total = (1 if groupable else 0) + len(rest)
+        c = 0
+
+        if groupable:
+            try:
+                result += c
+                shodan_search_worker_grouped(fk=fk, groupable=groupable, country=country,
+                                             all_results=all_results, max_pages=max_pages,
+                                             query_cache=query_cache)
+                progress_recorder.set_progress(c + 1, total=total)
+            except Exception as e:
+                print(e)
+            c += 1
+
+        for key, query, category in rest:
             try:
                 result += c
                 shodan_search_worker(country=country, fk=fk, query=query, search_type=key,
@@ -643,6 +731,7 @@ def shodan_search(self, fk, country=None, coordinates=None, ics=None, healthcare
                 progress_recorder.set_progress(c + 1, total=total)
             except Exception as e:
                 print(e)
+            c += 1
 
     if coordinates:
         total = len(coordinates_search)
@@ -681,6 +770,26 @@ def check_credits():
         print(e)
 
     return keys_list
+
+
+def count_devices(country, query):
+    """Return Shodan's total match count for `query` scoped to `country`,
+    using api.count instead of api.search.
+
+    api.count() costs ZERO Shodan query credits (unlike api.search(), which
+    costs one credit per page), so this is safe to call freely to preview how
+    many devices a search would return before actually running it.
+    """
+    SHODAN_API_KEY = keys['keys']['shodan']
+    api = Shodan(SHODAN_API_KEY)
+
+    if country == "XX":
+        full_query = query
+    else:
+        full_query = "country:" + country + " " + query
+
+    result = api.count(full_query)
+    return result.get('total', 0)
 
 
 def _save_device_from_result(search, result, search_type, category, query):
@@ -852,9 +961,19 @@ SHODAN_MAX_ATTEMPTS = 5
 SHODAN_BACKOFF_CAP_SECONDS = 30
 
 
-def shodan_search_worker(fk, query, search_type, category, country=None, coordinates=None, all_results=False,
-                         max_pages=None, query_cache=None):
-    """Run one Shodan query and save a Device row per match.
+def _run_shodan_query(fk, query, on_result, country=None, coordinates=None, all_results=False,
+                      max_pages=None, query_cache=None):
+    """Run one Shodan query, paginating/retrying/caching exactly as before,
+    and call `on_result(search, result)` for every raw match (fresh or
+    replayed from the cache).
+
+    Factored out of shodan_search_worker so shodan_search_worker (one query ->
+    one family) and shodan_search_worker_grouped (one combined query -> many
+    families, classified per-match by port) can share the same pagination,
+    bounded-retry, max_pages and query_cache machinery instead of duplicating
+    it. `_save_device_from_result` itself is called from `on_result`, by the
+    caller, so each caller decides what search_type/category a given match is
+    saved under.
 
     `max_pages`, if given, caps how many pages are fetched even when
     all_results=True (an "approximate run" knob). Default behavior is
@@ -864,8 +983,8 @@ def shodan_search_worker(fk, query, search_type, category, country=None, coordin
     `query_cache`, if given, is a dict shared across every family searched in
     the same shodan_search run, keyed on the exact query string + search
     scope (country/coordinates). If this exact query was already searched
-    earlier in the run, the cached matches are reused to create Device rows
-    for search_type/category without hitting the Shodan API again.
+    earlier in the run, the cached matches are replayed through `on_result`
+    without hitting the Shodan API again.
     """
     SHODAN_API_KEY = keys['keys']['shodan']
     print(query)
@@ -875,7 +994,7 @@ def shodan_search_worker(fk, query, search_type, category, country=None, coordin
         print("Reusing cached results for duplicate query: " + query)
         search = Search.objects.get(id=fk)
         for result in query_cache[cache_key]:
-            _save_device_from_result(search, result, search_type, category, query)
+            on_result(search, result)
         return
 
     collected_matches = []
@@ -937,7 +1056,7 @@ def shodan_search_worker(fk, query, search_type, category, country=None, coordin
 
         for result in results['matches']:
             collected_matches.append(result)
-            _save_device_from_result(search, result, search_type, category, query)
+            on_result(search, result)
 
         page = page + 1
         if not all_results:
@@ -945,6 +1064,61 @@ def shodan_search_worker(fk, query, search_type, category, country=None, coordin
 
     if query_cache is not None:
         query_cache[cache_key] = collected_matches
+
+
+def shodan_search_worker(fk, query, search_type, category, country=None, coordinates=None, all_results=False,
+                         max_pages=None, query_cache=None):
+    """Run one Shodan query and save a Device row per match, tagged with the
+    single given search_type/category. See _run_shodan_query for the shared
+    pagination/retry/cache behavior."""
+
+    def on_result(search, result):
+        _save_device_from_result(search, result, search_type, category, query)
+
+    _run_shodan_query(fk, query, on_result, country=country, coordinates=coordinates,
+                      all_results=all_results, max_pages=max_pages, query_cache=query_cache)
+
+
+def shodan_search_worker_grouped(fk, groupable, country, all_results=False, max_pages=None, query_cache=None):
+    """Run ONE combined `port:...` Shodan query covering every family in
+    `groupable` (as returned by partition_groupable — all category "ics" and
+    all keys in GROUPABLE_PORT_FAMILIES), and classify each returned match
+    back to its family locally by port via _PORT_TO_FAMILY, saving it with
+    that family's own (search_type, category).
+
+    This is the opt-in query-credit optimization: N groupable families would
+    normally cost N `api.search` calls (one per family, via
+    shodan_search_worker); here they cost exactly one combined `api.search`
+    call per page instead, since every port in the curated allowlist
+    unambiguously identifies one family. A match whose port isn't in the map
+    (shouldn't happen, since the query itself is `port:<only those ports>`)
+    is silently skipped.
+
+    Reuses _run_shodan_query for pagination/bounded-retry/max_pages/
+    query_cache, exactly like shodan_search_worker.
+    """
+    if not groupable:
+        return
+
+    ports = sorted({port for key, _query, _category in groupable
+                    for port in GROUPABLE_PORT_FAMILIES.get(key, [])})
+    if not ports:
+        return
+
+    combined_query = "port:" + ",".join(str(p) for p in ports)
+    # key -> (search_type, category) for every family in this grouped search.
+    # search_type is just the family key, same as the individual-search path.
+    families_by_key = {key: (key, category) for key, _query, category in groupable}
+
+    def on_result(search, result):
+        family_key = _PORT_TO_FAMILY.get(result.get('port'))
+        if family_key is None or family_key not in families_by_key:
+            return
+        search_type, category = families_by_key[family_key]
+        _save_device_from_result(search, result, search_type, category, combined_query)
+
+    _run_shodan_query(fk, combined_query, on_result, country=country, all_results=all_results,
+                      max_pages=max_pages, query_cache=query_cache)
 
 
 def nmap_host_worker(host_arg, max_reader, search):
