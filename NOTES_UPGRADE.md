@@ -89,3 +89,85 @@
 - The `CSRF`, `LoginRequiredMiddleware`, and `SECURE_*` settings introduced
   before this task were not modified, but were not re-verified against
   Django 4.2's current defaults beyond `manage.py check` passing.
+
+## Multi-category search + Shodan call reduction (kamerka/tasks.py, app_kamerka/views.py, app_kamerka/forms.py, app_kamerka/templates/search_main.html)
+
+- Added `resolve_family()`, `expand_families()` and `build_family_selection()`
+  to `kamerka/tasks.py` (pure functions, no I/O). Together they:
+  - resolve a family key (e.g. `"modbus"`) to its `(query, category)` across
+    `healthcare_queries` / `ics_queries` / `attackers_infra_queries`,
+  - expand a new `"__all__"` sentinel into every key of a given category,
+  - de-duplicate the final `(key, query, category)` list so the same
+    `(category, query)` is never searched twice in one run.
+- `shodan_search()` now takes `ics`, `healthcare` and `infra` as three
+  independent optional lists of family keys (each may contain `"__all__"`)
+  instead of the old `ics` list + `healthcare` boolean flag, and searches all
+  of them in the same run against the same `Search` row, with each `Device`
+  tagged with its real category. Coordinates search is untouched and stays a
+  separate flow/branch.
+- The ICS tab in `search_main.html` gained two checkboxes, "Also include all
+  Healthcare families" / "Also include all Attacker Infrastructure families",
+  so one submit can span ICS + healthcare + infra in a single `Search` row.
+  Each of the three family `<select multiple>`s (`ics_country`, `healthcare`,
+  `infra`) also gained a `"__all__"` ("-- All ... families --") first option
+  to select every family in that category without hand-picking each one.
+- `app_kamerka/views.py::search_main` was updated to read these new
+  controls, expand them into `ics=`/`healthcare=`/`infra=` lists passed to
+  `shodan_search.delay(...)`, and to fix a pre-existing bug in the infra tab
+  branch: it was calling `request.POST.getlist('country_infra')` to read the
+  selected family list, but `country_infra` is the single-value country
+  field — the family `<select multiple>` is named `infra`. That meant the
+  infra tab's family selection was silently ignored before this change; it
+  now reads `infra`.
+- Shodan call reduction implemented:
+  1. De-duplication (`build_family_selection`) plus an in-run `query_cache`
+     dict, shared across every family searched in one `shodan_search` call
+     and keyed on `(query, country, coordinates)`. If two selections resolve
+     to the exact same query in the same run, Shodan is only queried once;
+     the cached raw matches are replayed through `_save_device_from_result`
+     to create correctly-tagged `Device` rows for the second (and any
+     further) selection, with no extra API call.
+  2. `shodan_search_worker`'s inner `while not fail:` retry loop (which
+     retried forever on any exception — a malformed query could hang the
+     worker and burn Shodan query credits indefinitely) was replaced with a
+     bounded retry: up to `SHODAN_MAX_ATTEMPTS = 5` attempts with capped
+     exponential backoff (`min(2 ** attempt, 30)` seconds); on exhaustion it
+     logs and breaks out of that page's fetch instead of looping forever.
+  3. Added an optional `max_pages` parameter (threaded through
+     `shodan_search` → `shodan_search_worker`) to cap how many pages of
+     results are fetched for an "approximate" run. Default behavior is
+     unchanged: `all_results=False` still fetches exactly 1 page, and
+     `all_results=True` still fetches every page when `max_pages` is not
+     given.
+- **Curly/smart quotes**: `attackers_infra_queries["covenant"]` is
+  `'ssl:”Covenant” http.component:”Blazor”'` — it uses `”`(right double
+  quotation mark) instead of a straight `"`. Shodan's query syntax expects
+  straight quotes for exact-phrase matching, so this is not a valid
+  exact-phrase query as currently written. Left unfixed (added a code
+  comment instead) since swapping the quote characters would change what
+  this query actually matches on live Shodan and could not be verified
+  in this sandbox (no live Shodan access) — flagging it here for someone
+  with API access to fix and re-verify results.
+- **Deferred optimization (not implemented)**: the largest further cut in
+  Shodan API calls would come from grouping the many `port:`-based ICS
+  families (e.g. `niagara` on `port:1911,4911`, `dnp3` on `port:20000`,
+  `hart` on `port:5094`, `gestrip` on `port:18245,18246`, `mitsubishi` on
+  `port:5006,5007`, `omron` on `port:9600`, `redlion` on `port:789`, `iec`
+  on `port:2404`, `proconos` on `port:20547`, `tank` on `port:10001`,
+  `total_access` on `port:2000`, `doors` on `port:4070`, etc.) into a small
+  number of `country:XX port:a,b,c,...` searches covering many ports at
+  once, then classifying each match locally (by port, banner/`data`
+  content, or the same string checks `_save_device_from_result` already
+  does) instead of issuing one Shodan query per family. This could cut the
+  number of Shodan queries for an "all ICS families" run substantially.
+  It was **not** implemented here because: (a) several families share a
+  port (e.g. `niagara` alone already uses two ports, `gestrip` and
+  `mitsubishi` each use two), so classification would need to be
+  content-based, not just port-based, for those; (b) some queries are not
+  port-based at all (`bacnet`, `modbus`, `siemens`, etc. key off strings in
+  the banner, not a fixed port) and would need their own grouping strategy
+  or would have to stay as individual queries; (c) getting the
+  classification wrong silently mislabels or drops real devices, which is
+  a correctness risk that needs to be validated against live Shodan data,
+  which this sandbox does not have access to. Left as a future option for
+  someone who can verify it against real query results.

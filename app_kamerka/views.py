@@ -112,20 +112,37 @@ def search_main(request):
 
             ics_country = request.POST.getlist('ics_country')
 
-            if len(ics_country) == 0:
+            # Optional "also include everything in this other category" checkboxes
+            # on the ICS tab, so a single run/Search row can span ICS +
+            # healthcare + infra together (each Device is still tagged with its
+            # own correct category by shodan_search/shodan_search_worker).
+            extra_healthcare = ['__all__'] if request.POST.get('include_healthcare_all') else []
+            extra_infra = ['__all__'] if request.POST.get('include_infra_all') else []
+
+            if len(ics_country) == 0 and not extra_healthcare and not extra_infra:
                 form = forms.CountryForm()
                 return render(request, 'search_main.html', {'form': form})
 
-            search = Search(country=code, ics=ics_country)
+            # Keep the stored `ics` field consistent with what is actually
+            # searched: the selected ICS families plus a marker for any
+            # whole extra category that was included.
+            stored_selection = list(ics_country)
+            if extra_healthcare:
+                stored_selection.append('healthcare:__all__')
+            if extra_infra:
+                stored_selection.append('infra:__all__')
+
+            search = Search(country=code, ics=stored_selection)
             search.save()
-            post = request.POST.getlist('ics_country')
 
             if ics_form.cleaned_data['all'] == True:
                 all_results = True
             else:
                 all_results = False
 
-            shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=post, all_results=all_results)
+            shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=ics_country,
+                                                      healthcare=extra_healthcare, infra=extra_infra,
+                                                      all_results=all_results)
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')
@@ -144,14 +161,14 @@ def search_main(request):
 
             search = Search(country=code, ics=healthcare_country)
             search.save()
-            post = request.POST.getlist('healthcare')
 
             if healthcare_form.cleaned_data['all'] == True:
                 all_results = True
             else:
                 all_results = False
 
-            shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=post, healthcare=True, all_results=all_results)
+            shodan_search_task = shodan_search.delay(fk=search.id, country=code, healthcare=healthcare_country,
+                                                      all_results=all_results)
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')
@@ -178,22 +195,27 @@ def search_main(request):
 
             code = infra_form.cleaned_data['country_infra']
 
-            infra_country = request.POST.getlist('country_infra')
+            # NOTE: this used to read request.POST.getlist('country_infra'),
+            # but 'country_infra' is the (single-value) country field, not the
+            # family multiselect, which is named 'infra' in the template. That
+            # meant the family selection was never actually read here. Fixed
+            # to read the right field.
+            infra_country = request.POST.getlist('infra')
 
             if len(infra_country) == 0:
-                form = forms.CountryForm()
+                form = forms.InfraForm()
                 return render(request, 'search_main.html', {'form': form})
 
             search = Search(country=code, ics=infra_country)
             search.save()
-            post = infra_country
 
             if infra_form.cleaned_data['all'] == True:
                 all_results = True
             else:
                 all_results = False
 
-            shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=post, all_results=all_results)
+            shodan_search_task = shodan_search.delay(fk=search.id, country=code, infra=infra_country,
+                                                      all_results=all_results)
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')

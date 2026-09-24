@@ -450,10 +450,95 @@ coordinates_queries = {"videoiq": 'title:"VideoIQ Camera Login"',
 
 attackers_infra_queries = {"cobaltstrike": 'product:"Cobalt Strike Beacon"',
                            "msf": 'ssl:MetasploitSelfSignedCA',
+                           # NOTE: this query uses smart/curly quotes (”) around "Covenant" and
+                           # "Blazor". Shodan's query syntax only understands straight quotes ("...")
+                           # for exact-phrase matching, so as written this query is not doing an exact
+                           # phrase match the way the other quoted queries in this file do. Left as-is
+                           # per the request to only fix if trivial to avoid changing match behavior
+                           # for a query in active use without being able to verify results.
                            "covenant": 'ssl:”Covenant” http.component:”Blazor”',
                            "mythic": 'ssl:"Mythic" port:7443',
                            "bruteratel": "http.html_hash:-1957161625",
                            }
+
+# Sentinel value used by the search UI/forms to mean "every family in this
+# category", e.g. selecting it in the ICS multiselect expands to every key of
+# ics_queries. Handled by expand_families()/build_family_selection() below.
+ALL_FAMILIES = "__all__"
+
+# Category name -> the dict of family-key -> Shodan query string it draws from.
+# Coordinates searches are intentionally not part of this mapping: they remain
+# a separate flow (see shodan_search) and are not combined with a country
+# search in a single Search row.
+_CATEGORY_QUERY_DICTS = {
+    "healthcare": healthcare_queries,
+    "ics": ics_queries,
+    "infra": attackers_infra_queries,
+}
+
+
+def resolve_family(key, category_hint=None):
+    """Look up a family key and return (query, category), or None if unknown.
+
+    If category_hint is given ('healthcare' / 'ics' / 'infra'), only that
+    category's dict is checked (this disambiguates keys that happen to exist
+    in more than one dict). Otherwise every known category is checked.
+    """
+    if category_hint is not None:
+        d = _CATEGORY_QUERY_DICTS.get(category_hint)
+        if d and key in d:
+            return d[key], category_hint
+        return None
+
+    for category, d in _CATEGORY_QUERY_DICTS.items():
+        if key in d:
+            return d[key], category
+    return None
+
+
+def expand_families(keys, category):
+    """Expand any ALL_FAMILIES sentinel in `keys` into every key of that
+    category's query dict. Other keys are passed through unchanged. Order is
+    preserved and duplicates are not removed here (build_family_selection
+    de-duplicates the final result).
+    """
+    d = _CATEGORY_QUERY_DICTS.get(category, {})
+    expanded = []
+    for k in keys or []:
+        if k == ALL_FAMILIES:
+            expanded.extend(d.keys())
+        else:
+            expanded.append(k)
+    return expanded
+
+
+def build_family_selection(ics=None, healthcare=None, infra=None):
+    """Combine per-category family selections (each possibly containing the
+    ALL_FAMILIES sentinel) into a single, de-duplicated, ordered list of
+    (key, query, category) tuples ready to be searched.
+
+    - Expands "__all__" into every key of its category.
+    - Drops unknown keys.
+    - De-duplicates so the same (category, query) is only searched once, even
+      if it was selected more than once (directly and/or via "__all__").
+
+    This is a pure function (no I/O, no Celery/Shodan) so it can be unit
+    tested directly.
+    """
+    selection = []
+    seen = set()
+    for category, keys in (("ics", ics), ("healthcare", healthcare), ("infra", infra)):
+        for key in expand_families(keys, category):
+            resolved = resolve_family(key, category_hint=category)
+            if resolved is None:
+                continue
+            query, resolved_category = resolved
+            dedup_key = (resolved_category, query)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            selection.append((key, query, resolved_category))
+    return selection
 
 
 # API keys are read from a JSON file resolved relative to the project root
@@ -520,44 +605,44 @@ def devices_nearby(lat, lon, id, query):
 
 @shared_task(bind=True)
 def shodan_search(self, fk, country=None, coordinates=None, ics=None, healthcare=None, coordinates_search=None,
-                  all_results=False, infra=None):
+                  all_results=False, infra=None, max_pages=None):
+    """Run a Shodan search for one Search row.
+
+    `ics`, `healthcare` and `infra` are each an optional list of family keys
+    for their respective category (see the *_queries dicts above); any of
+    them may contain the ALL_FAMILIES ("__all__") sentinel to mean every
+    family in that category. When more than one of them is provided they are
+    all searched in this same run/Search row, with each resulting Device
+    tagged with its own correct category.
+
+    `healthcare` used to be a boolean flag (kept `ics` as the only list of
+    selected keys); it is now itself a list of healthcare family keys, same
+    shape as `ics`/`infra`. `coordinates`/`coordinates_search` are a separate
+    flow, unrelated to country-based category search, and are unaffected by
+    this change.
+
+    An in-run cache (keyed by the exact Shodan query string + search scope)
+    is shared across every family searched in this call, so if two different
+    selections end up resolving to the exact same query, Shodan is only
+    queried once and the cached matches are reused to create Device rows for
+    both.
+    """
     progress_recorder = ProgressRecorder(self)
     result = 0
+    query_cache = {}
+
     if country:
-        total = len(ics)
-        for c, i in enumerate(ics):
-            if healthcare:
-                if i in healthcare_queries:
-                    print(i)
-                    try:
-                        result += c
-                        shodan_search_worker(country=country, fk=fk, query=healthcare_queries[i], search_type=i,
-                                             category="healthcare",
-                                             all_results=all_results)
-                        progress_recorder.set_progress(c + 1, total=total)
-                    except:
-                        pass
-            else:
-
-                if i in ics_queries:
-                    try:
-                        result += c
-                        shodan_search_worker(country=country, fk=fk, query=ics_queries[i], search_type=i,
-                                             category="ics",
-                                             all_results=all_results)
-                        progress_recorder.set_progress(c + 1, total=total)
-                    except:
-                        pass
-
-                if i in attackers_infra_queries:
-                    try:
-                        result += c
-                        shodan_search_worker(country=country, fk=fk, query=attackers_infra_queries[i], search_type=i,
-                                             category="infra",
-                                             all_results=all_results)
-                        progress_recorder.set_progress(c + 1, total=total)
-                    except Exception as e:
-                        print(e)
+        selection = build_family_selection(ics=ics, healthcare=healthcare, infra=infra)
+        total = len(selection)
+        for c, (key, query, category) in enumerate(selection):
+            try:
+                result += c
+                shodan_search_worker(country=country, fk=fk, query=query, search_type=key,
+                                     category=category, all_results=all_results,
+                                     max_pages=max_pages, query_cache=query_cache)
+                progress_recorder.set_progress(c + 1, total=total)
+            except Exception as e:
+                print(e)
 
     if coordinates:
         total = len(coordinates_search)
@@ -567,7 +652,8 @@ def shodan_search(self, fk, country=None, coordinates=None, ics=None, healthcare
                 try:
                     result += c
                     shodan_search_worker(fk=fk, query=coordinates_queries[i], search_type=i, category="coordinates",
-                                         coordinates=coordinates, all_results=all_results)
+                                         coordinates=coordinates, all_results=all_results,
+                                         max_pages=max_pages, query_cache=query_cache)
                     progress_recorder.set_progress(c + 1, total=total)
                 except:
                     pass
@@ -597,43 +683,241 @@ def check_credits():
     return keys_list
 
 
-def shodan_search_worker(fk, query, search_type, category, country=None, coordinates=None, all_results=False):
-    results = True
-    page = 1
-    SHODAN_API_KEY = keys['keys']['shodan']
-    pages = 0
-    screenshot = ""
-    print(query)
-    # print(coordinates)
-    # print(country)
+def _save_device_from_result(search, result, search_type, category, query):
+    """Build and save one Device row from a single raw Shodan match `result`.
 
-    while results:
-        if pages == page:
-            results = False
+    Factored out of shodan_search_worker so it can run both against a fresh
+    API response and against a cached list of matches reused for a
+    duplicate-query search (see the query_cache handling below).
+    """
+    lat = str(result['location']['latitude'])
+    lon = str(result['location']['longitude'])
+    city = ""
+    indicator = []
+    screenshot = ""
+
+    try:
+        product = result['product']
+    except Exception:
+        product = ""
+
+    if 'vulns' in result:
+        vulns = [*result['vulns']]
+    else:
+        vulns = ""
+
+    if result['location']['city'] is not None:
+        city = result['location']['city']
+
+    hostnames = ""
+    try:
+        if 'hostnames' in result:
+            hostnames = result['hostnames'][0]
+    except Exception:
+        pass
+
+    try:
+        if 'SAILOR' in result['http']['title']:
+            html = result['http']['html']
+            soup = BeautifulSoup(html)
+            for gps in soup.find_all("span", {"id": "gnss_position"}):
+                gps_coordinates = gps.contents[0]
+                space = gps_coordinates.split(' ')
+                if "W" in space:
+                    lon = "-" + space[2][:-1]
+                else:
+                    lon = space[2][:-1]
+                lat = space[0][:-1]
+    except Exception:
+        pass
+
+    if 'opts' in result:
+        try:
+            screenshot = result['opts']['screenshot']['data']
+
+            with open("app_kamerka/static/images/screens/" + result['ip_str'] + ".jpg", "wb") as fh:
+                fh.write(base64.b64decode(screenshot))
+                fh.close()
+                for i in result['opts']['screenshot']['labels']:
+                    indicator.append(i)
+        except Exception:
+            pass
+
+    if query == "Niagara Web Server":
+        try:
+            soup = BeautifulSoup(result['http']['html'], features="html.parser")
+            nws = soup.find("div", {"class": "top"})
+            indicator.append(nws.contents[0])
+        except Exception:
+            pass
+
+    if "SOURCETABLE" in query:
+        data = result['data'].split(";")
+        try:
+            if re.match("^((\-?|\+?)?\d+(\.\d+)?)$", data[9]):
+                indicator.append(data[9] + "," + data[10])
+                lat = data[9]
+                lon = data[10]
+        except Exception:
+            pass
+
+    # get indicator from niagara fox
+    if result['port'] == 1911 or result['port'] == 4911:
+        try:
+            fox_data_splitted = result['data'].split("\n")
+            for i in fox_data_splitted:
+                if "station.name" in i:
+                    splitted = i.split(":")
+                    indicator.append(splitted[1])
+        except Exception:
+            pass
+
+    # get indicator from tank
+    if result['port'] == 10001 and "Siemens" not in query:
+        try:
+            tank_info = result['data'].split("\r\n\r\n")
+            indicator.append(tank_info[1])
+        except Exception:
+            pass
+
+    if result['port'] == 2000:
+        try:
+            ta_data = result['data'].split("\\n")
+            indicator.append(ta_data[1][:-3])
+        except Exception:
+            pass
+
+    if result['port'] == 502:
+        try:
+            sch_el = result['data'].split('\n')
+            if sch_el[4].startswith("-- Project"):
+                indicator.append(sch_el[4].split(": ")[1])
+        except Exception:
+            pass
+
+    if "GPGGA" in result['data']:
+        try:
+            splitted_data = result['data'].split('\n')
+            for i in splitted_data:
+                if "GPGGA" in i:
+                    msg = pynmea2.parse(i)
+                    lat = msg.latitude
+                    lon = msg.longitude
+                    break
+        except Exception:
+            pass
+
+    if result['port'] == 102:
+        try:
+            s7_data = result['data'].split("\n")
+            for i in s7_data:
+                if i.startswith("Plant"):
+                    indicator.append(i.split(":")[1])
+                if i.startswith("PLC"):
+                    indicator.append(i.split(":")[1])
+                if i.startswith("Module name"):
+                    indicator.append(i.split(":")[1])
+        except Exception:
+            pass
+    # get indicator from bacnet
+    if result['port'] == 47808:
+        try:
+            bacnet_data_splitted = result['data'].split("\n")
+            for i in bacnet_data_splitted:
+                if "Description" in i:
+                    splitted1 = i.split(":")
+                    indicator.append(splitted1[1])
+                if "Object Name" in i:
+                    splitted2 = i.split(":")
+                    indicator.append(splitted2[1])
+
+                if "Location" in i:
+                    splitted3 = i.split(":")
+                    indicator.append(splitted3[1])
+        except Exception:
+            pass
+
+    device = Device(search=search, ip=result['ip_str'], product=product, org=result['org'],
+                    data=result['data'], port=str(result['port']), type=search_type, city=city,
+                    lat=lat, lon=lon,
+                    country_code=result['location']['country_code'], query=search_type, category=category,
+                    vulns=vulns, indicator=indicator, hostnames=hostnames, screenshot=screenshot)
+    device.save()
+
+
+# Bounded retry settings for a single Shodan API call. The old code retried
+# forever on any exception (a malformed query, or Shodan being briefly down,
+# would hang the worker indefinitely and could keep burning query credits).
+SHODAN_MAX_ATTEMPTS = 5
+SHODAN_BACKOFF_CAP_SECONDS = 30
+
+
+def shodan_search_worker(fk, query, search_type, category, country=None, coordinates=None, all_results=False,
+                         max_pages=None, query_cache=None):
+    """Run one Shodan query and save a Device row per match.
+
+    `max_pages`, if given, caps how many pages are fetched even when
+    all_results=True (an "approximate run" knob). Default behavior is
+    unchanged: all_results=False still fetches exactly 1 page, and
+    all_results=True still fetches every page unless max_pages is passed.
+
+    `query_cache`, if given, is a dict shared across every family searched in
+    the same shodan_search run, keyed on the exact query string + search
+    scope (country/coordinates). If this exact query was already searched
+    earlier in the run, the cached matches are reused to create Device rows
+    for search_type/category without hitting the Shodan API again.
+    """
+    SHODAN_API_KEY = keys['keys']['shodan']
+    print(query)
+
+    cache_key = (query, country, coordinates)
+    if query_cache is not None and cache_key in query_cache:
+        print("Reusing cached results for duplicate query: " + query)
+        search = Search.objects.get(id=fk)
+        for result in query_cache[cache_key]:
+            _save_device_from_result(search, result, search_type, category, query)
+        return
+
+    collected_matches = []
+    api = Shodan(SHODAN_API_KEY)
+    page = 1
+    pages = None
+
+    while True:
+        # `pages` carries a +1 sentinel (see below), so stop once we've reached
+        # it: `>=`, not `>`, otherwise one extra (empty) page is fetched, which
+        # wastes a Shodan query credit per family in all_results mode.
+        if pages is not None and page >= pages:
+            break
+        if max_pages and page > max_pages:
             break
 
-        # Shodan sometimes fails with no reason, sleeping when it happens and it prevents rate limitation
         search = Search.objects.get(id=fk)
-        api = Shodan(SHODAN_API_KEY)
-        fail = False
 
-        while not fail:
+        # Shodan sometimes fails with no reason; retry with backoff instead of
+        # sleeping/retrying forever, which could hang the worker and bleed
+        # query credits on a persistently-failing (e.g. malformed) query.
+        results = None
+        for attempt in range(1, SHODAN_MAX_ATTEMPTS + 1):
             try:
                 time.sleep(3)
                 if coordinates:
                     results = api.search("geo:" + coordinates + ",20 " + query, page)
-                    # print(results)
-                    fail = True
-                    # print("geo:" + coordinates + ",20 " + query)
                 elif country == "XX":
                     results = api.search(query, page)
-                    fail = True
                 else:
                     results = api.search("country:" + country + " " + query, page)
-                    fail = True
-            except:
-                fail = False
-                print('fail1, sleeping...')
+                break
+            except Exception as e:
+                print('Shodan search failed (attempt %d/%d) for query %r: %s' %
+                     (attempt, SHODAN_MAX_ATTEMPTS, query, e))
+                results = None
+                if attempt < SHODAN_MAX_ATTEMPTS:
+                    time.sleep(min(2 ** attempt, SHODAN_BACKOFF_CAP_SECONDS))
+
+        if results is None:
+            print("Giving up on query after %d attempts: %s" % (SHODAN_MAX_ATTEMPTS, query))
+            break
 
         try:
             total = results['total']
@@ -645,168 +929,22 @@ def shodan_search_worker(fk, query, search_type, category, country=None, coordin
             print(e)
             break
 
-        # print(results)
         pages = math.ceil(total / 100) + 1
+        # Note: don't fold max_pages into `pages` here — the `page > max_pages`
+        # guard at the top of the loop already caps the number of pages fetched,
+        # and min()'ing it in interacts badly with the +1 sentinel above.
         print("Pages: " + str(pages))
-        for counter, result in enumerate(results['matches']):
-            lat = str(result['location']['latitude'])
-            lon = str(result['location']['longitude'])
-            city = ""
-            indicator = []
 
-            try:
-                product = result['product']
-            except:
-                product = ""
-
-            if 'vulns' in result:
-                vulns = [*result['vulns']]
-            else:
-                vulns = ""
-
-            if result['location']['city'] != None:
-                city = result['location']['city']
-
-            hostnames = ""
-            try:
-                if 'hostnames' in result:
-                    hostnames = result['hostnames'][0]
-            except:
-                pass
-
-            try:
-                if 'SAILOR' in result['http']['title']:
-                    html = result['http']['html']
-                    soup = BeautifulSoup(html)
-                    for gps in soup.find_all("span", {"id": "gnss_position"}):
-                        coordinates = gps.contents[0]
-                        space = coordinates.split(' ')
-                        if "W" in space:
-                            lon = "-" + space[2][:-1]
-                        else:
-                            lon = space[2][:-1]
-                        lat = space[0][:-1]
-            except Exception as e:
-                pass
-
-            if 'opts' in result:
-                try:
-                    screenshot = result['opts']['screenshot']['data']
-
-                    with open("app_kamerka/static/images/screens/" + result['ip_str'] + ".jpg", "wb") as fh:
-                        fh.write(base64.b64decode(screenshot))
-                        fh.close()
-                        for i in result['opts']['screenshot']['labels']:
-                            indicator.append(i)
-                except Exception as e:
-                    pass
-
-            if query == "Niagara Web Server":
-                try:
-                    soup = BeautifulSoup(result['http']['html'], features="html.parser")
-                    nws = soup.find("div", {"class": "top"})
-                    indicator.append(nws.contents[0])
-                except:
-                    pass
-
-            if "SOURCETABLE" in query:
-                data = result['data'].split(";")
-                try:
-                    if re.match("^((\-?|\+?)?\d+(\.\d+)?)$", data[9]):
-                        indicator.append(data[9] + "," + data[10])
-                        lat = data[9]
-                        lon = data[10]
-                    else:
-                        pass
-                except Exception as e:
-                    pass
-
-            # get indicator from niagara fox
-            if result['port'] == 1911 or result['port'] == 4911:
-                try:
-                    fox_data_splitted = result['data'].split("\n")
-                    for i in fox_data_splitted:
-                        if "station.name" in i:
-                            splitted = i.split(":")
-                            indicator.append(splitted[1])
-                except:
-                    pass
-
-            # get indicator from tank
-            if result['port'] == 10001 and "Siemens" not in query:
-                try:
-                    tank_info = result['data'].split("\r\n\r\n")
-                    indicator.append(tank_info[1])
-                except:
-                    pass
-
-            if result['port'] == 2000:
-                try:
-                    ta_data = result['data'].split("\\n")
-                    indicator.append(ta_data[1][:-3])
-                except Exception as e:
-                    pass
-
-            if result['port'] == 502:
-                try:
-                    sch_el = result['data'].split('\n')
-                    if sch_el[4].startswith("-- Project"):
-                        indicator.append(sch_el[4].split(": ")[1])
-                except:
-                    pass
-
-            if "GPGGA" in result['data']:
-                try:
-                    splitted_data = result['data'].split('\n')
-                    for i in splitted_data:
-                        if "GPGGA" in i:
-                            msg = pynmea2.parse(i)
-                            lat = msg.latitude
-                            lon = msg.longitude
-                            break
-                except Exception as e:
-                    pass
-
-            if result['port'] == 102:
-                try:
-                    s7_data = result['data'].split("\n")
-                    for i in s7_data:
-                        if i.startswith("Plant"):
-                            indicator.append(i.split(":")[1])
-                        if i.startswith("PLC"):
-                            indicator.append(i.split(":")[1])
-                        if i.startswith("Module name"):
-                            indicator.append(i.split(":")[1])
-                except:
-                    pass
-            # get indicator from bacnet
-            if result['port'] == 47808:
-                try:
-                    bacnet_data_splitted = result['data'].split("\n")
-                    for i in bacnet_data_splitted:
-                        if "Description" in i:
-                            splitted1 = i.split(":")
-                            indicator.append(splitted1[1])
-                        if "Object Name" in i:
-                            splitted2 = i.split(":")
-                            indicator.append(splitted2[1])
-
-                        if "Location" in i:
-                            splitted3 = i.split(":")
-                            indicator.append(splitted3[1])
-                except:
-                    pass
-
-            device = Device(search=search, ip=result['ip_str'], product=product, org=result['org'],
-                            data=result['data'], port=str(result['port']), type=search_type, city=city,
-                            lat=lat, lon=lon,
-                            country_code=result['location']['country_code'], query=search_type, category=category,
-                            vulns=vulns, indicator=indicator, hostnames=hostnames, screenshot=screenshot)
-            device.save()
+        for result in results['matches']:
+            collected_matches.append(result)
+            _save_device_from_result(search, result, search_type, category, query)
 
         page = page + 1
         if not all_results:
-            results = False
+            break
+
+    if query_cache is not None:
+        query_cache[cache_key] = collected_matches
 
 
 def nmap_host_worker(host_arg, max_reader, search):

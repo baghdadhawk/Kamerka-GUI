@@ -173,6 +173,7 @@ font-size: 22px;
                                                 <h3><center style="color: #00E1FF;">Device</center></h3>
 
                                                 <select id="ics_country" multiple name="ics_country">
+                                                    <option value="__all__">-- All ICS families --</option>
                                                     <option value="gestrip">General Electric</option>
   													<option value="hart">HartIP</option>
   													<option value="pcworx">PcWorx</option>
@@ -329,6 +330,11 @@ font-size: 22px;
 
                                 <input type="checkbox" id="test2" name="own_database"/><label style="float:right" for="test2"><span class="ui"></span> <h4>Own database</h4></label>
 
+                                <br>
+
+<input type="checkbox" id="include_healthcare_all" name="include_healthcare_all" /><label for="include_healthcare_all"><span class="ui"></span> Also include all Healthcare families in this search</label>
+
+                                <input type="checkbox" id="include_infra_all" name="include_infra_all"/><label style="float:right" for="include_infra_all"><span class="ui"></span> Also include all Attacker Infrastructure families in this search</label>
 
                                 <br>
                                 <br>
@@ -558,6 +564,7 @@ font-size: 22px;
                                                 <h3><center style="color: #00E1FF;">Device</center></h3>
 
                                                 <select id="healthcare" multiple name="healthcare">
+                                                    <option value="__all__">-- All Healthcare families --</option>
                                                     <option value="dicom">Dicom</option>
                                                     <option value="zoll">Zoll</option>
   													<option value="perioperative">GE Perioperative</option>
@@ -708,6 +715,7 @@ font-size: 22px;' class="image-title">
 
                                                 <select id="infra" multiple name="infra">
 
+                                                    <option value="__all__">-- All Infrastructure families --</option>
                                                     <option value="cobaltstrike">Cobalt Strike</option>
                                                     <option value="msf">Metasploit</option>
                                                     <option value="covenant">Covenant</option>
