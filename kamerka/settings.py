@@ -147,9 +147,14 @@ TIME_ZONE = 'UTC'
 
 USE_I18N = True
 
-USE_L10N = True
+# USE_L10N was removed in Django 5.0 (localized formatting is always on since
+# Django 4.0), so it is intentionally left unset here for forward compat.
 
 USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/2.2/howto/static-files/
+
+# Default primary key field type. Explicit so `makemigrations` on Django 3.2+
+# does not warn/prompt about the implicit-pk-type change.
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'

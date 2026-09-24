@@ -1,5 +1,5 @@
 from django.db import models
-from jsonfield import JSONField
+from django.db.models import JSONField
 
 
 # Create your models here.

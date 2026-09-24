@@ -23,6 +23,10 @@ from kamerka.tasks import shodan_search, devices_nearby, twitter_nearby_task, fl
 
 # Create your views here.
 
+def is_ajax(request):
+    """Replacement for the removed HttpRequest.is_ajax() (Django >= 3.1)."""
+    return request.headers.get('x-requested-with') == 'XMLHttpRequest'
+
 passwds = {"bosch_security":"""The Bosch Video Recorder 630/650 Series is an 8/16 
           channel digital recorder that uses the latest H.264 
           compression technology. With the supplied PC
@@ -108,20 +112,37 @@ def search_main(request):
 
             ics_country = request.POST.getlist('ics_country')
 
-            if len(ics_country) == 0:
+            # Optional "also include everything in this other category" checkboxes
+            # on the ICS tab, so a single run/Search row can span ICS +
+            # healthcare + infra together (each Device is still tagged with its
+            # own correct category by shodan_search/shodan_search_worker).
+            extra_healthcare = ['__all__'] if request.POST.get('include_healthcare_all') else []
+            extra_infra = ['__all__'] if request.POST.get('include_infra_all') else []
+
+            if len(ics_country) == 0 and not extra_healthcare and not extra_infra:
                 form = forms.CountryForm()
                 return render(request, 'search_main.html', {'form': form})
 
-            search = Search(country=code, ics=ics_country)
+            # Keep the stored `ics` field consistent with what is actually
+            # searched: the selected ICS families plus a marker for any
+            # whole extra category that was included.
+            stored_selection = list(ics_country)
+            if extra_healthcare:
+                stored_selection.append('healthcare:__all__')
+            if extra_infra:
+                stored_selection.append('infra:__all__')
+
+            search = Search(country=code, ics=stored_selection)
             search.save()
-            post = request.POST.getlist('ics_country')
 
             if ics_form.cleaned_data['all'] == True:
                 all_results = True
             else:
                 all_results = False
 
-            shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=post, all_results=all_results)
+            shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=ics_country,
+                                                      healthcare=extra_healthcare, infra=extra_infra,
+                                                      all_results=all_results)
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')
@@ -140,14 +161,14 @@ def search_main(request):
 
             search = Search(country=code, ics=healthcare_country)
             search.save()
-            post = request.POST.getlist('healthcare')
 
             if healthcare_form.cleaned_data['all'] == True:
                 all_results = True
             else:
                 all_results = False
 
-            shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=post, healthcare=True, all_results=all_results)
+            shodan_search_task = shodan_search.delay(fk=search.id, country=code, healthcare=healthcare_country,
+                                                      all_results=all_results)
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')
@@ -174,22 +195,27 @@ def search_main(request):
 
             code = infra_form.cleaned_data['country_infra']
 
-            infra_country = request.POST.getlist('country_infra')
+            # NOTE: this used to read request.POST.getlist('country_infra'),
+            # but 'country_infra' is the (single-value) country field, not the
+            # family multiselect, which is named 'infra' in the template. That
+            # meant the family selection was never actually read here. Fixed
+            # to read the right field.
+            infra_country = request.POST.getlist('infra')
 
             if len(infra_country) == 0:
-                form = forms.CountryForm()
+                form = forms.InfraForm()
                 return render(request, 'search_main.html', {'form': form})
 
             search = Search(country=code, ics=infra_country)
             search.save()
-            post = request.POST.getlist('infra')
 
-            if ics_form.cleaned_data['all'] == True:
+            if infra_form.cleaned_data['all'] == True:
                 all_results = True
             else:
                 all_results = False
 
-            shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=post, all_results=all_results)
+            shodan_search_task = shodan_search.delay(fk=search.id, country=code, infra=infra_country,
+                                                      all_results=all_results)
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')
@@ -391,7 +417,7 @@ def history(request):
 
 
 def update_coordinates(request,id, coordinates):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         dev = Device.objects.get(id=id)
         splitted_coord = coordinates.split(",")
         dev.lat = splitted_coord[0]
@@ -431,7 +457,7 @@ def device(request, id, device_id, ip):
 
 
 def nearby(request, id, query):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         all_devices = Device.objects.filter(id=id)
         device_nearby_task = devices_nearby.delay(lat=all_devices[0].lat, lon=all_devices[0].lon, id=id, query=query)
         return HttpResponse(json.dumps({'task_id': device_nearby_task.id}), content_type='application/json')
@@ -444,7 +470,7 @@ def sources(request):
 
 
 def twitter_nearby(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         tw = TwitterNearby.objects.filter(device_id=id)
 
@@ -460,7 +486,7 @@ def twitter_nearby(request, id):
 
 
 def twitter_show(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         a = TwitterNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', a)
@@ -468,10 +494,12 @@ def twitter_show(request, id):
             return HttpResponse(json.dumps({'Error': "No records"}), content_type='application/json')
         else:
             return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def flickr_nearby(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         fl = FlickrNearby.objects.filter(device_id=id)
 
@@ -488,7 +516,7 @@ def flickr_nearby(request, id):
 
 
 def shodan_scan(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         shodan_scan2 = ShodanScan.objects.filter(device_id=id)
 
@@ -516,78 +544,87 @@ def get_task_info(request):
             return HttpResponse('No job id given.')
     except Exception as e:
         print(e)
+        return HttpResponse(json.dumps({'Error': str(e)}), content_type='application/json', status=500)
 
 
 def get_shodan_scan_results(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         shodan_scan2 = ShodanScan.objects.filter(device_id=id)
 
-        print(shodan_scan2)
-
-        # shodan_scan2[0].ports = shodan_scan2[0].ports[:1][:-1]
-        # shodan_scan2[0].tags = shodan_scan2[0].tags[:1][:-1]
-        # shodan_scan2[0].vulns = shodan_scan2[0].vulns[:1][:-1]
-        # shodan_scan2[0].products = shodan_scan2[0].products[:1][:-1]
-
-        print(shodan_scan2[0].ports)
+        if not shodan_scan2:
+            return HttpResponse(json.dumps({'Error': "No records"}), content_type='application/json', status=404)
 
         response_data = serializers.serialize('json', shodan_scan2)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def get_nearby_devices(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         nearby_devices = DeviceNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', nearby_devices)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def scan_dev(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         res = scan(id)
         if res:
             return HttpResponse(json.dumps(res), content_type='application/json')
         else:
             return HttpResponse(json.dumps({'Error': "Connection Error"}), content_type='application/json')
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def exploit_dev(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         res = exploit(id)
         if res:
             return HttpResponse(json.dumps(res), content_type='application/json')
         else:
             return HttpResponse(json.dumps({'Error': "Connection Error"}), content_type='application/json')
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def get_flickr_results(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         nearby_flickr = FlickrNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', nearby_flickr)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def get_flickr_coordinates(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         nearby_flickr = FlickrNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', nearby_flickr)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def get_nearby_devices_coordinates(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         nearby_devices = DeviceNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', nearby_devices)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def send_to_field_agent(request, id, notes):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         print(id)
 
         host = Device.objects.get(id=id)
@@ -602,7 +639,7 @@ def send_to_field_agent(request, id, notes):
 
 
 def get_binaryedge_score(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         be = BinaryEdgeScore.objects.filter(device_id=id)
 
@@ -618,16 +655,18 @@ def get_binaryedge_score(request, id):
 
 
 def get_binaryedge_score_results(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         be = BinaryEdgeScore.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', be)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def whois(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         whoiss = Whois.objects.filter(device_id=id)
 
@@ -643,9 +682,11 @@ def whois(request, id):
 
 
 def get_whois(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         whoiss = Whois.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', whoiss)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
