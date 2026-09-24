@@ -17,6 +17,7 @@ urlpatterns = [
     path('celery-progress/', include('celery_progress.urls')),
     path("<id>/nearby/<query>", views.nearby, name='nearby'),
     path("<id>/update_coordinates/<coordinates>", views.update_coordinates, name='update_coordinates'),
+    path('search_estimate', views.search_estimate, name='search_estimate'),
 
     path("<id>/twitter/nearby", views.twitter_nearby, name='twitter_nearby'),
     path("<id>/twitter/show", views.twitter_show, name='twitter_show'),

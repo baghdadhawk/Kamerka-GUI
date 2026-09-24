@@ -337,6 +337,16 @@ font-size: 22px;
                                 <input type="checkbox" id="include_infra_all" name="include_infra_all"/><label style="float:right" for="include_infra_all"><span class="ui"></span> Also include all Attacker Infrastructure families in this search</label>
 
                                 <br>
+
+<input type="checkbox" id="group_ports" name="group_ports"/><label for="group_ports"><span class="ui"></span> Group protocol ports (fewer API calls)</label>
+
+                                <br>
+                                <br>
+
+<button type="button" id="estimate_btn" class="btn-submit m-t-0">Estimate results (free)</button>
+<span id="estimate_result" style="margin-left:10px;color:#00E1FF;"></span>
+
+                                <br>
                                 <br>
 
 <button class="btn-submit m-t-0" type="submit">search</button>
@@ -826,6 +836,35 @@ a.selectedValues = [];
 });
 a.selectedValues = [];
 </script>
+
+    <script>
+        // Free preview (uses Shodan's api.count, which costs zero query
+        // credits) of how many devices the currently-selected ICS families
+        // would return for the currently-selected country, without running
+        // an actual paid search.
+        $('#estimate_btn').on('click', function(){
+            var country = $('#country').val();
+            var ics = $('#ics_country').val() || [];
+
+            if (!country || ics.length === 0) {
+                $('#estimate_result').text('Pick a country and at least one ICS family first.');
+                return;
+            }
+
+            $('#estimate_result').text('Estimating...');
+            $.ajax({
+                type: "GET",
+                url: "/search_estimate",
+                data: $.param({country: country, ics: ics}, true),
+                success: function (data) {
+                    $('#estimate_result').text('Estimated devices: ' + data.total);
+                },
+                error: function(xhr, status, error) {
+                    $('#estimate_result').text('Estimate failed.');
+                }
+            });
+        });
+    </script>
     <script>
         a = new Selectr('#healthcare', {
 	searchable: true,

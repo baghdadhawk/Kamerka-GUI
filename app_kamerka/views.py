@@ -18,7 +18,7 @@ from app_kamerka.models import Search, Device, DeviceNearby, FlickrNearby, Shoda
     TwitterNearby, Bosch
 from kamerka.tasks import shodan_search, devices_nearby, twitter_nearby_task, flickr, shodan_scan_task, \
     binary_edge_scan, whoisxml, check_credits, send_to_field_agent_task, nmap_scan, validate_nmap, validate_maxmind, scan, \
-    exploit
+    exploit, build_family_selection, count_devices
 
 
 # Create your views here.
@@ -140,9 +140,15 @@ def search_main(request):
             else:
                 all_results = False
 
+            # Opt-in query-credit optimization (default off): collapse the
+            # curated set of port-identifiable ICS families into a single
+            # combined Shodan search instead of one search per family. See
+            # kamerka.tasks.GROUPABLE_PORT_FAMILIES/partition_groupable.
+            group_ports = bool(request.POST.get('group_ports'))
+
             shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=ics_country,
                                                       healthcare=extra_healthcare, infra=extra_infra,
-                                                      all_results=all_results)
+                                                      all_results=all_results, group_ports=group_ports)
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')
@@ -425,6 +431,44 @@ def update_coordinates(request,id, coordinates):
         dev.located = True
         dev.save()
         return HttpResponse(json.dumps({'Status': "OK"}), content_type='application/json')
+    else:
+        return HttpResponse(json.dumps({'Status': "NO OK"}), content_type='application/json')
+
+
+def search_estimate(request):
+    """AJAX preview of how many devices a search would return, WITHOUT
+    running a paid search: uses Shodan's api.count (zero query credits) per
+    selected ICS family instead of api.search.
+
+    GET params: `country` (country code, or "XX" for a global search) and one
+    or more `ics` values (family keys, or "__all__" for every ICS family).
+    Returns JSON: {"counts": {family_key: count, ...}, "total": int}. A
+    family whose count() call fails is reported as null and excluded from
+    the total, rather than failing the whole estimate.
+    """
+    if is_ajax(request) and request.method == 'GET':
+        country = request.GET.get('country')
+        ics_keys = request.GET.getlist('ics')
+
+        if not country or not ics_keys:
+            return HttpResponse(json.dumps({'error': 'country and ics are required'}),
+                                content_type='application/json', status=400)
+
+        selection = build_family_selection(ics=ics_keys)
+
+        counts = {}
+        total = 0
+        for key, query, category in selection:
+            try:
+                count = count_devices(country, query)
+            except Exception as e:
+                print(e)
+                count = None
+            counts[key] = count
+            if isinstance(count, int):
+                total += count
+
+        return HttpResponse(json.dumps({'counts': counts, 'total': total}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Status': "NO OK"}), content_type='application/json')
 
