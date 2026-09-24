@@ -1,5 +1,6 @@
 import ast
 import json
+import os
 from collections import Counter
 import requests
 from django.core.files.storage import FileSystemStorage
@@ -73,9 +74,16 @@ passwds = {"bosch_security":"""The Bosch Video Recorder 630/650 Series is an 8/1
            "lutron":"Quantum is a lighting control and energy management system that provides total light management by tying the most complete line of lighting controls, motorized window shades, digital ballasts and LED drivers, and sensors together under one software umbrella. Quantum is ideal for new construction or retrofit applications and can easily scale from a single area to a building, or to a campus with many buildings.<br>https://www.exploit-db.com/exploits/44488",
            }
 
+# API keys are read from a JSON file resolved relative to the project root
+# (or from the path in the KAMERKA_KEYS_FILE environment variable), so the
+# location no longer depends on the current working directory.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+KEYS_FILE = os.environ.get('KAMERKA_KEYS_FILE', os.path.join(_PROJECT_ROOT, 'keys.json'))
+
+
 def get_keys():
     try:
-        with open('keys.json') as keys:
+        with open(KEYS_FILE) as keys:
             keys_json = json.load(keys)
 
         return keys_json

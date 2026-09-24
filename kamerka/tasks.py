@@ -456,9 +456,16 @@ attackers_infra_queries = {"cobaltstrike": 'product:"Cobalt Strike Beacon"',
                            }
 
 
+# API keys are read from a JSON file resolved relative to the project root
+# (or from the path in the KAMERKA_KEYS_FILE environment variable), so the
+# location no longer depends on the current working directory.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+KEYS_FILE = os.environ.get('KAMERKA_KEYS_FILE', os.path.join(_PROJECT_ROOT, 'keys.json'))
+
+
 def get_keys():
     try:
-        with open('keys.json') as keys:
+        with open(KEYS_FILE) as keys:
             keys_json = json.load(keys)
 
         return keys_json
