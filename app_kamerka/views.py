@@ -23,6 +23,10 @@ from kamerka.tasks import shodan_search, devices_nearby, twitter_nearby_task, fl
 
 # Create your views here.
 
+def is_ajax(request):
+    """Replacement for the removed HttpRequest.is_ajax() (Django >= 3.1)."""
+    return request.headers.get('x-requested-with') == 'XMLHttpRequest'
+
 passwds = {"bosch_security":"""The Bosch Video Recorder 630/650 Series is an 8/16 
           channel digital recorder that uses the latest H.264 
           compression technology. With the supplied PC
@@ -182,9 +186,9 @@ def search_main(request):
 
             search = Search(country=code, ics=infra_country)
             search.save()
-            post = request.POST.getlist('infra')
+            post = infra_country
 
-            if ics_form.cleaned_data['all'] == True:
+            if infra_form.cleaned_data['all'] == True:
                 all_results = True
             else:
                 all_results = False
@@ -391,7 +395,7 @@ def history(request):
 
 
 def update_coordinates(request,id, coordinates):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         dev = Device.objects.get(id=id)
         splitted_coord = coordinates.split(",")
         dev.lat = splitted_coord[0]
@@ -431,7 +435,7 @@ def device(request, id, device_id, ip):
 
 
 def nearby(request, id, query):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         all_devices = Device.objects.filter(id=id)
         device_nearby_task = devices_nearby.delay(lat=all_devices[0].lat, lon=all_devices[0].lon, id=id, query=query)
         return HttpResponse(json.dumps({'task_id': device_nearby_task.id}), content_type='application/json')
@@ -444,7 +448,7 @@ def sources(request):
 
 
 def twitter_nearby(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         tw = TwitterNearby.objects.filter(device_id=id)
 
@@ -460,7 +464,7 @@ def twitter_nearby(request, id):
 
 
 def twitter_show(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         a = TwitterNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', a)
@@ -468,10 +472,12 @@ def twitter_show(request, id):
             return HttpResponse(json.dumps({'Error': "No records"}), content_type='application/json')
         else:
             return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def flickr_nearby(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         fl = FlickrNearby.objects.filter(device_id=id)
 
@@ -488,7 +494,7 @@ def flickr_nearby(request, id):
 
 
 def shodan_scan(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         shodan_scan2 = ShodanScan.objects.filter(device_id=id)
 
@@ -516,78 +522,87 @@ def get_task_info(request):
             return HttpResponse('No job id given.')
     except Exception as e:
         print(e)
+        return HttpResponse(json.dumps({'Error': str(e)}), content_type='application/json', status=500)
 
 
 def get_shodan_scan_results(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         shodan_scan2 = ShodanScan.objects.filter(device_id=id)
 
-        print(shodan_scan2)
-
-        # shodan_scan2[0].ports = shodan_scan2[0].ports[:1][:-1]
-        # shodan_scan2[0].tags = shodan_scan2[0].tags[:1][:-1]
-        # shodan_scan2[0].vulns = shodan_scan2[0].vulns[:1][:-1]
-        # shodan_scan2[0].products = shodan_scan2[0].products[:1][:-1]
-
-        print(shodan_scan2[0].ports)
+        if not shodan_scan2:
+            return HttpResponse(json.dumps({'Error': "No records"}), content_type='application/json', status=404)
 
         response_data = serializers.serialize('json', shodan_scan2)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def get_nearby_devices(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         nearby_devices = DeviceNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', nearby_devices)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def scan_dev(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         res = scan(id)
         if res:
             return HttpResponse(json.dumps(res), content_type='application/json')
         else:
             return HttpResponse(json.dumps({'Error': "Connection Error"}), content_type='application/json')
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def exploit_dev(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         res = exploit(id)
         if res:
             return HttpResponse(json.dumps(res), content_type='application/json')
         else:
             return HttpResponse(json.dumps({'Error': "Connection Error"}), content_type='application/json')
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def get_flickr_results(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         nearby_flickr = FlickrNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', nearby_flickr)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def get_flickr_coordinates(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         nearby_flickr = FlickrNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', nearby_flickr)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def get_nearby_devices_coordinates(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         nearby_devices = DeviceNearby.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', nearby_devices)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def send_to_field_agent(request, id, notes):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         print(id)
 
         host = Device.objects.get(id=id)
@@ -602,7 +617,7 @@ def send_to_field_agent(request, id, notes):
 
 
 def get_binaryedge_score(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         be = BinaryEdgeScore.objects.filter(device_id=id)
 
@@ -618,16 +633,18 @@ def get_binaryedge_score(request, id):
 
 
 def get_binaryedge_score_results(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         be = BinaryEdgeScore.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', be)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def whois(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
 
         whoiss = Whois.objects.filter(device_id=id)
 
@@ -643,9 +660,11 @@ def whois(request, id):
 
 
 def get_whois(request, id):
-    if request.is_ajax() and request.method == 'GET':
+    if is_ajax(request) and request.method == 'GET':
         whoiss = Whois.objects.filter(device_id=id)
 
         response_data = serializers.serialize('json', whoiss)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
