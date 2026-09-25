@@ -1,3 +1,5 @@
+import csv
+import json
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -751,3 +753,183 @@ class CelerySettingsTests(TestCase):
     def test_broker_connection_retry_on_startup_is_true(self):
         from django.conf import settings
         self.assertIs(settings.CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP, True)
+
+
+class ExportDevicesViewTests(TestCase):
+    """export_devices streams the SAME filtered device list as devices()
+    (they share filter_devices()), as CSV (default) or JSON."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='export_tester', password='pw12345')
+        self.client.force_login(self.user)
+
+        self.search1 = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.search2 = Search.objects.create(country='DE', ics='bacnet', coordinates='', coordinates_search='')
+
+        self.modbus_us = Device.objects.create(
+            search=self.search1, ip='10.0.0.1', product='Modbus PLC', org='ACME', type='modbus',
+            category='ics', port='502', country_code='US', city='NYC', lat='1.0', lon='2.0',
+            vulns="['CVE-2020-1111']", hostnames='plc.example.com', honeypot_score=10,
+        )
+        self.bacnet_de = Device.objects.create(
+            search=self.search2, ip='10.0.0.2', product='BACnet Ctrl', org='OtherOrg', type='bacnet',
+            category='ics', port='47808', country_code='DE', vulns='',
+        )
+
+    def test_csv_export_default_format(self):
+        response = self.client.get(reverse('export_devices'), {'country': 'US'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertIn('attachment', response['Content-Disposition'])
+        self.assertIn('devices.csv', response['Content-Disposition'])
+
+        content = response.content.decode('utf-8')
+        reader = csv.DictReader(content.splitlines())
+        rows = list(reader)
+        self.assertEqual(reader.fieldnames, [
+            'ip', 'product', 'org', 'port', 'type', 'category', 'country_code',
+            'city', 'lat', 'lon', 'vulns', 'honeypot_score', 'status',
+            'suspected_false_positive', 'hostnames',
+        ])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['ip'], '10.0.0.1')
+        self.assertEqual(rows[0]['vulns'], 'CVE-2020-1111')
+        self.assertEqual(rows[0]['hostnames'], 'plc.example.com')
+
+    def test_explicit_csv_format(self):
+        response = self.client.get(reverse('export_devices'), {'format': 'csv'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        content = response.content.decode('utf-8')
+        reader = csv.DictReader(content.splitlines())
+        self.assertEqual(len(list(reader)), 2)
+
+    def test_json_export(self):
+        response = self.client.get(reverse('export_devices'), {'format': 'json', 'country': 'DE'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+        self.assertIn('devices.json', response['Content-Disposition'])
+
+        data = json.loads(response.content)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['ip'], '10.0.0.2')
+        self.assertEqual(data[0]['vulns'], '')
+
+    def test_json_export_all_devices(self):
+        response = self.client.get(reverse('export_devices'), {'format': 'json'})
+        data = json.loads(response.content)
+        self.assertEqual(len(data), 2)
+
+    def test_filters_respected_search_id(self):
+        response = self.client.get(reverse('export_devices'), {'search_id': self.search1.id})
+        content = response.content.decode('utf-8')
+        reader = csv.DictReader(content.splitlines())
+        rows = list(reader)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['ip'], '10.0.0.1')
+
+
+class HoneypotFilterEverywhereTests(TestCase):
+    """?hide_honeypot=1 (new) and ?honeypot=1 (existing) on the devices
+    view, kept in sync via the shared filter_devices() helper."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='hp_tester', password='pw12345')
+        self.client.force_login(self.user)
+
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.normal = Device.objects.create(
+            search=search, ip='1.1.1.1', type='modbus', category='ics', honeypot_score=0,
+        )
+        self.flagged = Device.objects.create(
+            search=search, ip='2.2.2.2', type='conpot', category='ics', honeypot_score=HONEYPOT_THRESHOLD,
+        )
+
+    def test_hide_honeypot_excludes_flagged_rows(self):
+        response = self.client.get(reverse('devices'), {'hide_honeypot': '1'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['devices']), [self.normal])
+        self.assertEqual(response.context['filters'], {'hide_honeypot': '1'})
+
+    def test_honeypot_only_includes_flagged_rows(self):
+        response = self.client.get(reverse('devices'), {'honeypot': '1'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['devices']), [self.flagged])
+
+    def test_no_filter_returns_both(self):
+        response = self.client.get(reverse('devices'))
+        self.assertEqual(set(response.context['devices']), {self.normal, self.flagged})
+
+    def test_map_hide_honeypot_excludes_flagged(self):
+        response = self.client.get(reverse('map'), {'hide_honeypot': '1'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.context['devices']), {self.normal})
+
+    def test_map_without_filter_includes_all(self):
+        response = self.client.get(reverse('map'))
+        self.assertEqual(set(response.context['devices']), {self.normal, self.flagged})
+
+    def test_results_honeypot_filters(self):
+        response = self.client.get(reverse('results', args=[self.normal.search_id]), {'hide_honeypot': '1'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['search']), [self.normal])
+
+        response = self.client.get(reverse('results', args=[self.normal.search_id]), {'honeypot': '1'})
+        self.assertEqual(list(response.context['search']), [self.flagged])
+
+
+class GetCreditsViewTests(TestCase):
+    """get_credits: thin AJAX-gated wrapper around kamerka.tasks.check_credits,
+    used by the search_main pre-search credit-guard UI."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='credits_tester', password='pw12345')
+        self.client.force_login(self.user)
+
+    def test_non_ajax_is_not_ok(self):
+        response = self.client.get(reverse('get_credits'))
+        self.assertContains(response, 'NO OK')
+
+    def test_ajax_returns_credits(self):
+        with mock.patch('app_kamerka.views.check_credits', return_value=[123, 456]):
+            response = self.client.get(reverse('get_credits'), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'shodan_credits': 123, 'binaryedge_credits': 456})
+
+    def test_ajax_handles_partial_credits(self):
+        with mock.patch('app_kamerka.views.check_credits', return_value=[42]):
+            response = self.client.get(reverse('get_credits'), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'shodan_credits': 42, 'binaryedge_credits': None})
+
+    def test_ajax_handles_no_credits(self):
+        with mock.patch('app_kamerka.views.check_credits', return_value=[]):
+            response = self.client.get(reverse('get_credits'), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'shodan_credits': None, 'binaryedge_credits': None})
+
+
+class NearbyDevicesTwinTests(TestCase):
+    """get_nearby_devices and get_nearby_devices_coordinates now share one
+    implementation (they were byte-identical), but both URL names must keep
+    working for the templates/JS that call each of them."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='nearby_tester', password='pw12345')
+        self.client.force_login(self.user)
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
+
+    def test_both_endpoints_share_implementation(self):
+        from app_kamerka import views
+        self.assertIs(views.get_nearby_devices, views.get_nearby_devices_coordinates)
+
+    def test_get_nearby_devices_coordinates_ajax_is_200(self):
+        response = self.client.get(
+            reverse('get_nearby_devices_coordinates', args=[self.device.id]), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_nearby_devices_coordinates_non_ajax_is_400(self):
+        response = self.client.get(reverse('get_nearby_devices_coordinates', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)

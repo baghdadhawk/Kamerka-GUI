@@ -165,7 +165,7 @@ font-size: 22px;
                     <div class="tab-content">
                         <div class="tab-pane active" id="tab1">
                                                                            <h3><center style="color: #00E1FF;">Country</center></h3>
-                            <form method="POST" action="">
+                            <form method="POST" action="" id="ics-search-form">
                                 {% csrf_token %}
 
 	 <select class="selectpicker countrypicker" name='country' id='country' data-default="CA" data-flag="true" ></select>
@@ -347,6 +347,7 @@ font-size: 22px;
 
 <button type="button" id="estimate_btn" class="btn-submit m-t-0">Estimate results (free)</button>
 <span id="estimate_result" style="margin-left:10px;color:#00E1FF;"></span>
+<div id="credit_line" class="km-credit-line"></div>
 
                                 <br>
                                 <br>
@@ -889,6 +890,121 @@ new Selectr('#cam', {
 	searchable: true,
 	width: 300
 });
+    </script>
+
+    <!-- Pre-search credit-guard confirm dialog: shown before an ICS search
+         is actually submitted when the free api.count() estimate looks
+         large relative to the Shodan query credits remaining. -->
+    <div class="km-guard-overlay" id="credit-guard-overlay">
+        <div class="km-guard-box">
+            <h4>&#9888; This search may use a lot of credits</h4>
+            <p id="credit-guard-message"></p>
+            <button type="button" class="km-btn" id="credit-guard-confirm">Search anyway</button>
+            <button type="button" class="km-btn km-btn-danger" id="credit-guard-cancel">Cancel</button>
+        </div>
+    </div>
+    <script>
+        // Surfaces the free (zero-credit) search_estimate + remaining Shodan
+        // credits together, and requires an explicit confirm before the
+        // (paid, per-page) ICS search actually submits when the estimate
+        // looks large relative to what's left. Does not touch Selectr's own
+        // wiring, group_ports, or the existing estimate_btn handler above --
+        // it only adds a credits line and a submit guard.
+        var lastEstimateTotal = null;
+        var lastShodanCredits = null;
+        var guardConfirmed = false;
+
+        function fetchCredits(callback) {
+            $.ajax({
+                type: "GET",
+                url: "/get_credits",
+                success: function (data) {
+                    lastShodanCredits = data.shodan_credits;
+                    if (callback) callback();
+                },
+                error: function () {
+                    lastShodanCredits = null;
+                    if (callback) callback();
+                }
+            });
+        }
+
+        function renderCreditLine() {
+            if (lastShodanCredits === null || lastShodanCredits === undefined) {
+                $('#credit_line').text('');
+                return;
+            }
+            var msg = 'Shodan query credits remaining: ' + lastShodanCredits;
+            if (lastEstimateTotal !== null && lastShodanCredits > 0 &&
+                lastEstimateTotal > lastShodanCredits * 10) {
+                $('#credit_line').html(
+                    '<span class="km-credit-warning">&#9888; ' + msg +
+                    ' -- the estimated ' + lastEstimateTotal + ' devices looks large relative to that.</span>'
+                );
+            } else {
+                $('#credit_line').text(msg);
+            }
+        }
+
+        $('#estimate_btn').on('click', function() {
+            guardConfirmed = false;
+            fetchCredits(renderCreditLine);
+        });
+
+        // Piggyback on the existing estimate AJAX success (see the
+        // estimate_btn handler above) by polling the displayed text is
+        // fragile, so instead re-issue the same free estimate call here to
+        // capture the total for the guard, in parallel with the credits
+        // fetch above. This never replaces api.search and never spends
+        // credits.
+        $('#estimate_btn').on('click', function() {
+            var country = $('#country').val();
+            var ics = $('#ics_country').val() || [];
+            if (!country || ics.length === 0) {
+                lastEstimateTotal = null;
+                return;
+            }
+            $.ajax({
+                type: "GET",
+                url: "/search_estimate",
+                data: $.param({country: country, ics: ics}, true),
+                success: function (data) {
+                    lastEstimateTotal = data.total;
+                    renderCreditLine();
+                }
+            });
+        });
+
+        function guardThresholdExceeded() {
+            return lastEstimateTotal !== null && lastShodanCredits !== null &&
+                lastShodanCredits > 0 && lastEstimateTotal > lastShodanCredits * 10;
+        }
+
+        $('#ics-search-form').on('submit', function(e) {
+            if (guardConfirmed) {
+                return true;
+            }
+            if (guardThresholdExceeded()) {
+                e.preventDefault();
+                $('#credit-guard-message').text(
+                    'Estimated ~' + lastEstimateTotal + ' devices, but only ' +
+                    lastShodanCredits + ' Shodan query credits remain. Continue anyway?'
+                );
+                $('#credit-guard-overlay').addClass('open');
+                return false;
+            }
+            return true;
+        });
+
+        $('#credit-guard-confirm').on('click', function() {
+            guardConfirmed = true;
+            $('#credit-guard-overlay').removeClass('open');
+            $('#ics-search-form').submit();
+        });
+
+        $('#credit-guard-cancel').on('click', function() {
+            $('#credit-guard-overlay').removeClass('open');
+        });
     </script>
 </body>
 </html>

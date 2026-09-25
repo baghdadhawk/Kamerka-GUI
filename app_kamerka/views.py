@@ -1,8 +1,10 @@
 import ast
+import csv
 import json
 import logging
 import os
 from collections import Counter
+from urllib.parse import urlencode
 import requests
 from django.core.files.storage import FileSystemStorage
 from .forms import UploadFileForm
@@ -329,10 +331,9 @@ def index(request):
     return render(request, 'index.html', context)
 
 
-def devices(request):
-    """List devices, optionally filtered by GET params so infographics
-    (ports/type/category/country/vuln charts) and the history/search pages
-    can link straight into a filtered device list.
+def filter_devices(request):
+    """Apply the GET-param device filters shared by the `devices` list view
+    and `export_devices`, so the two can never drift apart.
 
     Supported params (all optional, combined with AND; unknown/empty
     params are ignored):
@@ -344,10 +345,16 @@ def devices(request):
       - vuln: substring match against the stored vulns (a CVE id)
       - honeypot: truthy (e.g. "1") restricts to devices whose local
         heuristic honeypot_score is at/above HONEYPOT_THRESHOLD.
+      - hide_honeypot: truthy -- the inverse of `honeypot`, excludes devices
+        whose honeypot_score is at/above HONEYPOT_THRESHOLD.
       - status: exact match on Device.status (new/reviewed/confirmed/
         false_positive, see Device.STATUS_CHOICES).
       - false_positive=0 (or hide_fp, truthy): excludes devices flagged
         suspected_false_positive=True.
+
+    Returns (queryset, filters) where `filters` is an ordered dict of the
+    params that were actually applied, suitable both for the "active
+    filters" UI and for rebuilding the querystring (e.g. on export links).
     """
     all_devices = Device.objects.all()
 
@@ -384,9 +391,13 @@ def devices(request):
         filters['vuln'] = vuln
 
     honeypot = request.GET.get('honeypot')
+    hide_honeypot = request.GET.get('hide_honeypot')
     if honeypot:
         all_devices = all_devices.filter(honeypot_score__gte=HONEYPOT_THRESHOLD)
         filters['honeypot'] = honeypot
+    elif hide_honeypot:
+        all_devices = all_devices.exclude(honeypot_score__gte=HONEYPOT_THRESHOLD)
+        filters['hide_honeypot'] = hide_honeypot
 
     status = request.GET.get('status')
     if status:
@@ -402,22 +413,126 @@ def devices(request):
         all_devices = all_devices.exclude(suspected_false_positive=True)
         filters['false_positive'] = false_positive
 
+    return all_devices, filters
+
+
+def parse_cves(vulns):
+    """Safely parse a Device.vulns value (an ast.literal_eval-able string,
+    e.g. "['CVE-2020-1111']") into a plain list of CVE id strings, for the
+    devices/results tables to render as individual badges. Never raises --
+    anything that doesn't parse to a list/tuple/set just yields [].
+    """
+    if not vulns:
+        return []
+    try:
+        parsed = ast.literal_eval(vulns)
+    except Exception:
+        return []
+    if isinstance(parsed, (list, tuple, set)):
+        return [str(v) for v in parsed if v]
+    return []
+
+
+def honeypot_toggle_qs(filters):
+    """urlencode() the active filters minus honeypot/hide_honeypot, so
+    templates can build the "Only honeypots"/"Hide honeypots"/"All" toggle
+    links (each just appends its own honeypot param) without dropping any
+    other active filter (port/type/country/search_id/...).
+    """
+    base = {k: v for k, v in filters.items() if k not in ('honeypot', 'hide_honeypot')}
+    return urlencode(base)
+
+
+def devices(request):
+    """List devices, optionally filtered by GET params so infographics
+    (ports/type/category/country/vuln charts) and the history/search pages
+    can link straight into a filtered device list. See filter_devices() for
+    the supported params -- also used, unchanged, by export_devices().
+    """
+
+    all_devices, filters = filter_devices(request)
+
     for i in all_devices:
         try:
             i.indicator = ast.literal_eval(i.indicator)
         except Exception as e:
             logger.info("devices: failed to parse indicator for device %s: %s", i.id, e)
+        i.cves = parse_cves(i.vulns)
 
-    context = {"devices": all_devices, "filters": filters}
+    context = {
+        "devices": all_devices,
+        "filters": filters,
+        "export_qs": urlencode(filters),
+        "honeypot_base_qs": honeypot_toggle_qs(filters),
+    }
 
     return render(request, "devices.html", context=context)
+
+
+EXPORT_FIELDS = [
+    'ip', 'product', 'org', 'port', 'type', 'category', 'country_code',
+    'city', 'lat', 'lon', 'vulns', 'honeypot_score', 'status',
+    'suspected_false_positive', 'hostnames',
+]
+
+
+def export_devices(request):
+    """Stream the SAME filtered device list as `devices()` (via
+    filter_devices(), so the two views can't drift) as a CSV or JSON
+    download. `format=csv|json` GET param, default csv.
+    """
+    all_devices, _filters = filter_devices(request)
+    export_format = (request.GET.get('format') or 'csv').lower()
+
+    def row_dict(device):
+        try:
+            vulns = ast.literal_eval(device.vulns) if device.vulns else []
+            vulns_str = ';'.join(vulns) if isinstance(vulns, (list, tuple, set)) else str(vulns)
+        except Exception:
+            vulns_str = device.vulns
+
+        return {
+            'ip': device.ip,
+            'product': device.product,
+            'org': device.org,
+            'port': device.port,
+            'type': device.type,
+            'category': device.category,
+            'country_code': device.country_code,
+            'city': device.city,
+            'lat': device.lat,
+            'lon': device.lon,
+            'vulns': vulns_str,
+            'honeypot_score': device.honeypot_score,
+            'status': device.status,
+            'suspected_false_positive': device.suspected_false_positive,
+            'hostnames': device.hostnames,
+        }
+
+    if export_format == 'json':
+        data = [row_dict(d) for d in all_devices]
+        response = HttpResponse(json.dumps(data, default=str), content_type='application/json')
+        response['Content-Disposition'] = 'attachment; filename="devices.json"'
+        return response
+
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="devices.csv"'
+    writer = csv.DictWriter(response, fieldnames=EXPORT_FIELDS)
+    writer.writeheader()
+    for d in all_devices:
+        writer.writerow(row_dict(d))
+    return response
 
 def map(request):
     all_devices = Device.objects.all()
 
+    hide_honeypot = request.GET.get('hide_honeypot')
+    if hide_honeypot:
+        all_devices = all_devices.exclude(honeypot_score__gte=HONEYPOT_THRESHOLD)
+
     google_maps_key = keys['keys']['google_maps']
 
-    context = {"devices": all_devices, 'google_maps_key': google_maps_key}
+    context = {"devices": all_devices, 'google_maps_key': google_maps_key, 'hide_honeypot': hide_honeypot}
 
     return render(request, "map.html", context=context)
 
@@ -429,7 +544,15 @@ def gallery(request):
 
 
 def results(request, id):
+
     all_devices = Device.objects.filter(search_id=id)
+
+    honeypot = request.GET.get('honeypot')
+    hide_honeypot = request.GET.get('hide_honeypot')
+    if honeypot:
+        all_devices = all_devices.filter(honeypot_score__gte=HONEYPOT_THRESHOLD)
+    elif hide_honeypot:
+        all_devices = all_devices.exclude(honeypot_score__gte=HONEYPOT_THRESHOLD)
     ports = Device.objects.filter(search_id=id).values('port').annotate(c=Count('port')).order_by('-c')[:7]
     city = Device.objects.filter(search_id=id).values('city').annotate(c=Count('city')).order_by('-c')[:7]
     category = Device.objects.filter(search_id=id).values('type').annotate(c=Count('type')).order_by('-c')
@@ -468,7 +591,14 @@ def results(request, id):
 
         except Exception as e:
             logger.info("results: failed to parse indicator for device %s: %s", i.id, e)
+        i.cves = parse_cves(i.vulns)
 
+
+    result_filters = {'search_id': id}
+    if honeypot:
+        result_filters['honeypot'] = honeypot
+    elif hide_honeypot:
+        result_filters['hide_honeypot'] = hide_honeypot
 
     context = {'search': all_devices,
                'ports': ports_list,
@@ -476,7 +606,9 @@ def results(request, id):
                "category": categories_list,
                "city": cities_list,
                'google_maps_key': google_maps_key,
-               'search_id': id}
+               'search_id': id,
+               'export_qs': urlencode(result_filters),
+               'honeypot_base_qs': urlencode({'search_id': id})}
 
     return render(request, 'results.html', context)
 
@@ -546,6 +678,27 @@ def search_estimate(request):
                 total += count
 
         return HttpResponse(json.dumps({'counts': counts, 'total': total}), content_type='application/json')
+    else:
+        return HttpResponse(json.dumps({'Status': "NO OK"}), content_type='application/json')
+
+
+def get_credits(request):
+    """AJAX endpoint exposing check_credits() (Shodan query credits +
+    BinaryEdge requests remaining) to the search_main pre-search credit-guard
+    UI, without making the template call into kamerka.tasks directly.
+
+    Returns JSON: {"shodan_credits": int|null, "binaryedge_credits": int|null}.
+    check_credits() returns a plain list (index 0 = shodan, index 1 =
+    binaryedge), each entry only present if that API call succeeded.
+    """
+    if is_ajax(request) and request.method == 'GET':
+        credits_list = check_credits()
+        shodan_credits = credits_list[0] if len(credits_list) > 0 else None
+        binaryedge_credits = credits_list[1] if len(credits_list) > 1 else None
+        return HttpResponse(
+            json.dumps({'shodan_credits': shodan_credits, 'binaryedge_credits': binaryedge_credits}),
+            content_type='application/json',
+        )
     else:
         return HttpResponse(json.dumps({'Status': "NO OK"}), content_type='application/json')
 
@@ -694,15 +847,11 @@ def exploit_dev(request, id):
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
-def get_nearby_devices_coordinates(request, id):
-    if is_ajax(request) and request.method == 'GET':
-        nearby_devices = DeviceNearby.objects.filter(device_id=id)
-
-        response_data = serializers.serialize('json', nearby_devices)
-
-        return HttpResponse(response_data, content_type="application/json")
-    else:
-        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
+# get_nearby_devices_coordinates used to be a byte-identical copy of
+# get_nearby_devices. Both URL names are kept (the coordinates-search UI and
+# the ICS/etc UI each hit their own endpoint name), but they now share one
+# implementation so there is only one place to fix bugs in.
+get_nearby_devices_coordinates = get_nearby_devices
 
 def send_to_field_agent(request, id, notes):
     if is_ajax(request) and request.method == 'GET':

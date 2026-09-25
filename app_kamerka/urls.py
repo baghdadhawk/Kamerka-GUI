@@ -9,6 +9,7 @@ urlpatterns = [
     path('gallery', views.gallery, name='gallery'),
 
     path('devices', views.devices, name='devices'),
+    path('export_devices', views.export_devices, name='export_devices'),
     path('sources', views.sources, name='sources'),
 
     path("results/<id>", views.results, name='results'),
@@ -18,6 +19,7 @@ urlpatterns = [
     path("<id>/nearby/<query>", views.nearby, name='nearby'),
     path("<id>/update_coordinates/<coordinates>", views.update_coordinates, name='update_coordinates'),
     path('search_estimate', views.search_estimate, name='search_estimate'),
+    path('get_credits', views.get_credits, name='get_credits'),
 
     path("<id>/shodan/scan", views.shodan_scan, name='shodan_scan'),
     path('get-task-info/', views.get_task_info, name="get_task_info"),

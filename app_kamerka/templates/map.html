@@ -100,6 +100,10 @@
                        <div class="panel panel-default">
                                 <div class="panel-heading ui-draggable-handle">
                                     <h3 class="panel-title">Google World Map</h3>
+                                    <label class="km-map-honeypot-toggle" style="float:right; font-weight:normal; color:var(--km-text-dim);">
+                                        <input type="checkbox" id="map-hide-honeypot" {% if hide_honeypot %}checked{% endif %}>
+                                        Hide likely honeypots
+                                    </label>
                                 </div>
                                 <div class="panel-body panel-body-map">
                                     <div id="google_world_map" style="width: 100%; height: 600px;">
@@ -126,6 +130,17 @@
 <script src="{% static 'js/markerclusterer.js' %}"></script>
 
 <script type="text/javascript">
+$(document).ready(function() {
+    $('#map-hide-honeypot').on('change', function() {
+        var url = new URL(window.location.href);
+        if ($(this).is(':checked')) {
+            url.searchParams.set('hide_honeypot', '1');
+        } else {
+            url.searchParams.delete('hide_honeypot');
+        }
+        window.location.href = url.toString();
+    });
+});
 var marker;
 var gm_map;
 var markerArray = [];
