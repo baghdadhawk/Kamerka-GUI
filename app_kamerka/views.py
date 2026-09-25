@@ -1,5 +1,6 @@
 import ast
 import json
+import logging
 import os
 from collections import Counter
 import requests
@@ -21,6 +22,9 @@ from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
     exploit, build_family_selection, count_devices, honeyscore
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import HONEYPOT_THRESHOLD
+from app_kamerka.sightings import other_sightings
+
+logger = logging.getLogger(__name__)
 
 
 # Create your views here.
@@ -94,7 +98,7 @@ def get_keys():
 
         return keys_json
     except Exception as e:
-        print(e)
+        logger.warning("Failed to load keys file %s: %s", KEYS_FILE, e)
 
 
 keys = get_keys()
@@ -230,7 +234,7 @@ def search_main(request):
 
         try:
             myfile = request.FILES['myfile']
-        except:
+        except Exception:
             form = forms.CountryForm()
             return render(request, 'search_main.html', {'form': form})
 
@@ -240,7 +244,7 @@ def search_main(request):
                 fs = FileSystemStorage()
                 filename = fs.save(myfile.name, myfile)
                 uploaded_file_url = fs.url(filename)
-                print(uploaded_file_url)
+                logger.info("Uploaded nmap file: %s", uploaded_file_url)
                 validate_nmap(uploaded_file_url)
                 validate_maxmind()
                 search = Search(country="NMAP Scan", ics=myfile.name,nmap=True)
@@ -248,9 +252,9 @@ def search_main(request):
                 nmap_task = nmap_scan.delay(uploaded_file_url ,fk=search.id)
 
                 request.session['task_id'] = nmap_task.task_id
-                print('session')
+                logger.info("nmap_task queued: %s", nmap_task.task_id)
             except Exception as e:
-                print(e)
+                logger.exception("nmap file upload/scan failed: %s", e)
                 return JsonResponse({'message':str(e)}, status=500)
 
             return HttpResponseRedirect('index')
@@ -302,12 +306,12 @@ def index(request):
         try:
             j.country = pycountry.countries.get(alpha_2=j.country).name
             j.ics = ast.literal_eval(j.ics)
-        except:
-            pass
+        except Exception as e:
+            logger.info("index: failed to parse country/ics for search %s: %s", j.id, e)
         try:
             j.coordinates_search = ast.literal_eval(j.coordinates_search)
-        except:
-            pass
+        except Exception as e:
+            logger.info("index: failed to parse coordinates_search for search %s: %s", j.id, e)
 
     credits = check_credits()
 
@@ -340,6 +344,10 @@ def devices(request):
       - vuln: substring match against the stored vulns (a CVE id)
       - honeypot: truthy (e.g. "1") restricts to devices whose local
         heuristic honeypot_score is at/above HONEYPOT_THRESHOLD.
+      - status: exact match on Device.status (new/reviewed/confirmed/
+        false_positive, see Device.STATUS_CHOICES).
+      - false_positive=0 (or hide_fp, truthy): excludes devices flagged
+        suspected_false_positive=True.
     """
     all_devices = Device.objects.all()
 
@@ -380,11 +388,25 @@ def devices(request):
         all_devices = all_devices.filter(honeypot_score__gte=HONEYPOT_THRESHOLD)
         filters['honeypot'] = honeypot
 
+    status = request.GET.get('status')
+    if status:
+        all_devices = all_devices.filter(status=status)
+        filters['status'] = status
+
+    false_positive = request.GET.get('false_positive')
+    hide_fp = request.GET.get('hide_fp')
+    if hide_fp:
+        all_devices = all_devices.exclude(suspected_false_positive=True)
+        filters['hide_fp'] = hide_fp
+    elif false_positive == '0':
+        all_devices = all_devices.exclude(suspected_false_positive=True)
+        filters['false_positive'] = false_positive
+
     for i in all_devices:
         try:
             i.indicator = ast.literal_eval(i.indicator)
-        except:
-            pass
+        except Exception as e:
+            logger.info("devices: failed to parse indicator for device %s: %s", i.id, e)
 
     context = {"devices": all_devices, "filters": filters}
 
@@ -444,8 +466,8 @@ def results(request, id):
         try:
             i.indicator = ast.literal_eval(i.indicator)
 
-        except:
-            pass
+        except Exception as e:
+            logger.info("results: failed to parse indicator for device %s: %s", i.id, e)
 
 
     context = {'search': all_devices,
@@ -466,12 +488,12 @@ def history(request):
         try:
             i.coordinates_search = ast.literal_eval(i.coordinates_search)
         except Exception as e:
-            print(e)
+            logger.info("history: failed to parse coordinates_search for search %s: %s", i.id, e)
 
         try:
             i.ics = ast.literal_eval(i.ics)
         except Exception as e:
-            print(e)
+            logger.info("history: failed to parse ics for search %s: %s", i.id, e)
 
     context = {'history': all_searches}
     return render(request, 'history.html', context)
@@ -517,7 +539,7 @@ def search_estimate(request):
             try:
                 count = count_devices(country, query)
             except Exception as e:
-                print(e)
+                logger.warning("search_estimate: count_devices failed for %s/%s: %s", country, query, e)
                 count = None
             counts[key] = count
             if isinstance(count, int):
@@ -562,6 +584,11 @@ def device(request, id, device_id, ip):
     except Exception:
         honeypot_reasons = []
 
+    # Cross-search de-dupe: other Device rows sharing this IP, from any
+    # other search, most-recent first (see app_kamerka.sightings). UI
+    # wiring for this comes in a later batch; the data is ready here.
+    sightings = other_sightings(all_devices)
+
     context = {'device': all_devices,
                'nearby': nearby,
                "shodan": shodan,
@@ -571,7 +598,9 @@ def device(request, id, device_id, ip):
                "banner_warning": looks_like_generic_http_response(all_devices.data),
                "honeypot_reasons": honeypot_reasons,
                "honeypot_threshold": HONEYPOT_THRESHOLD,
-               "is_likely_honeypot": all_devices.honeypot_score >= HONEYPOT_THRESHOLD}
+               "is_likely_honeypot": all_devices.honeypot_score >= HONEYPOT_THRESHOLD,
+               "other_sightings": sightings,
+               "sightings_count": sightings.count()}
 
     return render(request, 'device.html', context)
 
@@ -595,7 +624,7 @@ def shodan_scan(request, id):
         shodan_scan2 = ShodanScan.objects.filter(device_id=id)
 
         if shodan_scan2:
-            print('already')
+            logger.info("shodan_scan: already in database for device %s", id)
             return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
 
         shodan_scan_task2 = shodan_scan_task.delay(id=id)
@@ -617,7 +646,7 @@ def get_task_info(request):
         else:
             return HttpResponse('No job id given.')
     except Exception as e:
-        print(e)
+        logger.exception("get_task_info failed for task_id=%s: %s", task_id, e)
         return HttpResponse(json.dumps({'Error': str(e)}), content_type='application/json', status=500)
 
 
@@ -677,7 +706,7 @@ def get_nearby_devices_coordinates(request, id):
 
 def send_to_field_agent(request, id, notes):
     if is_ajax(request) and request.method == 'GET':
-        print(id)
+        logger.info("send_to_field_agent for device %s", id)
 
         host = Device.objects.get(id=id)
         host.notes = notes
@@ -696,7 +725,7 @@ def get_binaryedge_score(request, id):
         be = BinaryEdgeScore.objects.filter(device_id=id)
 
         if be:
-            print('already')
+            logger.info("get_binaryedge_score: already in database for device %s", id)
             return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
 
         be_task = binary_edge_scan.delay(id=id)
@@ -723,7 +752,7 @@ def whois(request, id):
         whoiss = Whois.objects.filter(device_id=id)
 
         if whoiss:
-            print('already')
+            logger.info("whois: already in database for device %s", id)
             return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
 
         wh_task = whoisxml.delay(id=id)
@@ -758,5 +787,34 @@ def get_whois(request, id):
         response_data = serializers.serialize('json', whoiss)
 
         return HttpResponse(response_data, content_type="application/json")
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
+
+
+def set_device_status(request, id):
+    """AJAX endpoint to set a Device's manual triage status (see
+    Device.STATUS_CHOICES). Accepts the new status via GET or POST (`status`
+    param), mirroring the whois/get_binaryedge_score AJAX pattern. The UI to
+    drive this comes in a later batch; this is just the model + endpoint.
+    """
+    if is_ajax(request) and request.method in ('GET', 'POST'):
+        new_status = request.POST.get('status') or request.GET.get('status')
+        valid_statuses = {choice[0] for choice in Device.STATUS_CHOICES}
+
+        if new_status not in valid_statuses:
+            return HttpResponse(
+                json.dumps({'Error': "Invalid status", 'valid_statuses': sorted(valid_statuses)}),
+                content_type='application/json', status=400,
+            )
+
+        try:
+            device1 = Device.objects.get(id=id)
+        except Device.DoesNotExist:
+            return HttpResponse(json.dumps({'Error': "No such device"}), content_type='application/json', status=404)
+
+        device1.status = new_status
+        device1.save()
+
+        return HttpResponse(json.dumps({'status': device1.status}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)

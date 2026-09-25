@@ -56,13 +56,21 @@ if not DEBUG:
     X_FRAME_OPTIONS = 'DENY'
 
 # CELERY STUFF
-BROKER_URL = 'redis://localhost:6379'
+# Celery 5's app.config_from_object(..., namespace='CELERY') (see
+# kamerka/celery.py) expects every setting here to be uppercase and
+# CELERY_-prefixed -- BROKER_URL (the old, un-namespaced Celery 3/4 form) is
+# silently ignored by Celery 5+, so it is renamed to CELERY_BROKER_URL.
+CELERY_BROKER_URL = 'redis://localhost:6379'
 CELERY_RESULT_BACKEND = 'redis://localhost:6379'
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Nairobi'
 CELERY_IMPORTS = ('kamerka.tasks',)
+# Celery 6 will require the worker to explicitly opt in to retrying its
+# initial broker connection on startup; set it now to silence the
+# deprecation warning under Celery 5.
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 # Application definition
 STATIC_URL = '/static/'
 MEDIA_URL = '/scans/'
@@ -158,3 +166,29 @@ USE_TZ = True
 # Default primary key field type. Explicit so `makemigrations` on Django 3.2+
 # does not warn/prompt about the implicit-pk-type change.
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
+
+# Minimal logging config: a console handler at INFO so the print()-replacing
+# logger.info/warning/exception calls throughout app_kamerka/views.py and
+# kamerka/tasks.py still show up when running the dev server or a celery
+# worker, instead of being silently dropped by Django's default logging
+# config (which only surfaces WARNING+ on django.request/django.server).
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'simple': {
+            'format': '%(asctime)s %(levelname)s %(name)s: %(message)s',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'level': 'INFO',
+            'formatter': 'simple',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+}
