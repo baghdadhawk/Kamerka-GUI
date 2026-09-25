@@ -15,9 +15,11 @@
         <script src="{% static 'js/d3.layout.cloud.js' %}" charset="UTF-8"></script>
         <script src="{% static 'js/d3.wordcloud.js' %}" charset="UTF-8"></script>
         <link rel="stylesheet" type="text/css" id="theme" href="{% static 'css/theme-default.css' %}"/>
+        <link rel="stylesheet" type="text/css" href="{% static 'css/kamerka-modern.css' %}"/>
         <!-- EOF CSS INCLUDE -->
     </head>
     <body>
+        {% include '_nav.html' %}
         <!-- START PAGE CONTAINER -->
         <div class="page-container">
             
@@ -314,6 +316,11 @@ function customProgress(progressBarElement, progressBarMessageElement, progress)
       d3v3.wordcloud()
         .size([400, 200])
         .selector('#wordcloud')
+        .onwordclick(function(d, i){
+            if (d && d.text) {
+                window.location.href = '/devices?vuln=' + encodeURIComponent(d.text);
+            }
+        })
         .words([{% for vuln, link in vulns %} {text: "{{  vuln }}", size: "12"}, {% endfor %}])
         .start();
     </script>

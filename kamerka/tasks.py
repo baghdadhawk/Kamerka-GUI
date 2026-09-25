@@ -6,13 +6,11 @@ import maxminddb
 from libnmap.parser import NmapParser
 import os
 from time import sleep
-import flickrapi
 import requests
 from celery import shared_task, current_task
 from celery_progress.backend import ProgressRecorder
 from pybinaryedge import BinaryEdge
 from shodan import Shodan
-from twitter import *
 import time
 from bs4 import BeautifulSoup
 import pynmea2
@@ -29,8 +27,9 @@ import xml.etree.ElementTree as et
 
 from app_kamerka import exploits
 
-from app_kamerka.models import Device, DeviceNearby, Search, TwitterNearby, FlickrNearby, ShodanScan, BinaryEdgeScore, \
+from app_kamerka.models import Device, DeviceNearby, Search, ShodanScan, BinaryEdgeScore, \
     Whois, Bosch
+from app_kamerka.honeypot import score_device
 
 healthcare_queries = {"zoll": "http.favicon.hash:-236942626",
                       'dicom': "dicom",
@@ -792,6 +791,25 @@ def count_devices(country, query):
     return result.get('total', 0)
 
 
+def honeyscore(ip):
+    """Best-effort wrapper around Shodan's api.honeyscore(ip): a 0.0-1.0
+    probability that `ip` is a honeypot. Shodan's honeyscore endpoint is
+    known to be flaky (rate limits, occasional 5xx/timeouts), so any
+    failure is swallowed and reported as None rather than raising -- this
+    is an on-demand, best-effort signal, not a hard dependency.
+    """
+    SHODAN_API_KEY = keys['keys']['shodan']
+    try:
+        api = Shodan(SHODAN_API_KEY)
+        # In shodan-python the honeyscore endpoint lives on the `labs`
+        # sub-client (api.labs.honeyscore), NOT directly on the client.
+        result = api.labs.honeyscore(ip)
+        return float(result)
+    except Exception as e:
+        print(e)
+        return None
+
+
 def _save_device_from_result(search, result, search_type, category, query):
     """Build and save one Device row from a single raw Shodan match `result`.
 
@@ -951,6 +969,20 @@ def _save_device_from_result(search, result, search_type, category, query):
                     lat=lat, lon=lon,
                     country_code=result['location']['country_code'], query=search_type, category=category,
                     vulns=vulns, indicator=indicator, hostnames=hostnames, screenshot=screenshot)
+
+    # Local (offline, no extra API calls) honeypot heuristic. Best-effort:
+    # a scoring error must never prevent the device from being saved.
+    try:
+        honeypot_score, honeypot_reasons = score_device(
+            data=result.get('data', ''), product=product, org=result.get('org', ''),
+            hostnames=hostnames, port=result.get('port'), category=category,
+            ip=result.get('ip_str'), type=search_type,
+        )
+        device.honeypot_score = honeypot_score
+        device.honeypot_reasons = json.dumps(honeypot_reasons)
+    except Exception as e:
+        print(e)
+
     device.save()
 
 
@@ -1168,47 +1200,6 @@ def nmap_scan(self, file, fk):
     return result
 
 
-@shared_task(bind=False)
-def twitter_nearby_task(id, lat, lon):
-    # Twitter
-    TWITTER_ACCESS_TOKEN = keys['keys']['twitter_access_token']
-    TWITTER_ACCESS_TOKEN_SECRET = keys['keys']['twitter_access_token_secret']
-    TWITTER_CONSUMER_KEY = keys['keys']['twitter_consumer_key']
-    TWITTER_CONSUMER_SECRET = keys['keys']['twitter_consumer_secret']
-
-    twitter = Twitter(auth=OAuth(TWITTER_ACCESS_TOKEN,
-                                 TWITTER_ACCESS_TOKEN_SECRET,
-                                 TWITTER_CONSUMER_KEY,
-                                 TWITTER_CONSUMER_SECRET))
-
-    device1 = Device.objects.get(id=id)
-    num_pages = 20
-    pages = 0
-    last_id = None
-    while pages < num_pages:
-        try:
-            query = twitter.search.tweets(q="", geocode=lat + "," + lon, count=100,
-                                          include_entities=True, max_id=last_id, result_type='mixed')
-            pages += 1
-            current_task.update_state(state='PROGRESS',
-                                      meta={'current': pages, 'total': num_pages,
-                                            'percent': int((float(pages) / num_pages) * 100)})
-            print(str(pages) + " page")
-            for counter, result in enumerate(query["statuses"]):
-                if 'coordinates' in result:
-                    if result['coordinates'] != None:
-                        tw = TwitterNearby(device=device1, lat=str(result['coordinates']['coordinates'][0]),
-                                           lon=str(result['coordinates']['coordinates'][1]),
-                                           tweet=result['text'].encode('ascii', 'ignore')
-                                           )
-                        tw.save()
-
-        except TwitterHTTPError as e:
-            print(e.args)
-
-    return {'current': num_pages, 'total': num_pages, 'percent': 100}
-
-
 def paste_login(username, password, key):
     login_url = "https://pastebin.com/api/api_login.php"
     login_payload = {"api_dev_key": key, "api_user_name": username, "api_user_password": password}
@@ -1318,34 +1309,6 @@ def send_to_field_agent_task(id, notes):
         create_paste(keys['keys']['pastebin_dev_key'], user_key, "ꓘamerka_" + af.ip, merge_string)
     else:
         create_paste(keys['keys']['pastebin_dev_key'], user_key, "ꓘamerka_" + af.ip, merge_string)
-
-
-@shared_task(bind=False)
-def flickr(id, lat, lon):
-    FLICKR_API_KEY = keys['keys']['flickr_api_key']
-    FLICKR_SECRET_API_KEY = keys['keys']['flickr_api_key']
-    device1 = Device.objects.get(id=id)
-
-    flickr = flickrapi.FlickrAPI(FLICKR_API_KEY, FLICKR_SECRET_API_KEY)
-    try:
-        photo_list = flickr.photos.search(api_key=FLICKR_API_KEY, lat=lat, lon=lon, accuracy=16, format='parsed-json',
-                                          per_page=100, extras='url_l,geo', has_geo=1, sort='newest')
-    except Exception as e:
-        print(e.args)
-
-    total = 100
-
-    for counter, photo in enumerate(photo_list['photos']['photo']):
-        if 'url_l' in photo:
-            flickr_db = FlickrNearby(device=device1, lat=str(photo['latitude']),
-                                     lon=str(photo['longitude']), title=photo['title'], url=photo['url_l'])
-            flickr_db.save()
-            print(counter)
-            current_task.update_state(state='PROGRESS',
-                                      meta={'current': counter, 'total': total,
-                                            'percent': int((float(counter) / total) * 100)})
-
-    return {'current': total, 'total': total, 'percent': 100}
 
 
 @shared_task(bind=False)

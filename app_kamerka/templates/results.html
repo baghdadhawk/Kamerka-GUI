@@ -15,9 +15,11 @@
         <script src="{% static 'js/d3.layout.cloud.js' %}" charset="UTF-8"></script>
         <script src="{% static 'js/d3.wordcloud.js' %}" charset="UTF-8"></script>
         <link rel="stylesheet" type="text/css" id="theme" href="{% static 'css/theme-default.css' %}"/>
+        <link rel="stylesheet" type="text/css" href="{% static 'css/kamerka-modern.css' %}"/>
         <!-- EOF CSS INCLUDE -->
     </head>
     <body>
+        {% include '_nav.html' %}
         <!-- START PAGE CONTAINER -->
         <div class="page-container">
 
@@ -150,6 +152,7 @@
                                                     <th>Indicator</th>
                                                 <th>Located</th>
                                                     <th>Exploited</th>
+                                                    <th>Honeypot</th>
 
 
                                                 </tr>
@@ -175,6 +178,11 @@
                                                     <td>{% for a in device.indicator %}{{ a }} {% endfor %}</td>
                                                     <td>{{ device.located }}</td>
                                                    <td>{{ device.exploited_scanned }}</td>
+                                                   {% if device.honeypot_score >= 50 %}
+                                                   <td><span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:2px 6px; border-radius:3px;">&#9888; honeypot ({{ device.honeypot_score }})</span></td>
+                                                   {% else %}
+                                                   <td></td>
+                                                   {% endif %}
 
 
 
@@ -663,6 +671,11 @@ function initialize() {
      d3v3.wordcloud()
         .size([500, 300])
         .selector('#wordcloud')
+        .onwordclick(function(d, i){
+            if (d && d.text) {
+                window.location.href = '/devices?vuln=' + encodeURIComponent(d.text) + '&search_id={{ search_id }}';
+            }
+        })
         .words([{% for vuln, link in vulns %} {text: "{{  vuln }}", size: "15"}, {% endfor %}])
         .start();
     </script>
@@ -691,7 +704,7 @@ function initialize() {
 
         <script type="text/javascript" src="{% static 'js/actions.js' %}"></script>
         <script type="text/javascript" src="{% static 'js/draw_charts_results.js' %}"></script>
-                <script>drawCharts({{ports|safe}}, {{city|safe}},{{category|safe}});</script>
+                <script>drawCharts({{ports|safe}}, {{city|safe}},{{category|safe}}, "{{ search_id }}");</script>
 
         <!-- END TEMPLATE -->
 

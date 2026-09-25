@@ -1,7 +1,15 @@
-function drawCharts(ports, cities, categories){
+function drawCharts(ports, cities, categories, searchId){
 
+    /* Build a devices link scoped to this search, plus any extra filter. */
+    function devicesUrl(param, value){
+        var url = '/devices?' + param + '=' + encodeURIComponent(value);
+        if (searchId !== undefined && searchId !== null && searchId !== '') {
+            url += '&search_id=' + encodeURIComponent(searchId);
+        }
+        return url;
+    }
 
-    /* Donut dashboard chart */
+    /* Donut dashboard chart (categories -> device "type") */
     var don = Morris.Donut({
     labelColor: '#00E1FF',
         element: 'morris-donut-example',
@@ -11,8 +19,13 @@ function drawCharts(ports, cities, categories){
         resize: true,
         parseTime: false
     });
+    don.on('click', function(i, row){
+        if (row && row.label) {
+            window.location.href = devicesUrl('type', row.label);
+        }
+    });
     /* END Donut dashboard chart */
-	
+
 	var horizontal = Morris.Bar({
   element: 'morris-horizontal',
   data: ports,
@@ -27,6 +40,11 @@ function drawCharts(ports, cities, categories){
         resize: true,
   gridLineColor: '#0064d7'
 });
+    horizontal.on('click', function(i, row){
+        if (row && row.port) {
+            window.location.href = devicesUrl('port', row.port);
+        }
+    });
     /* Bar dashboard chart */
     var bar=Morris.Bar({
         element: 'morris-bar-example',

@@ -1,0 +1,34 @@
+{% load static %}
+<nav id="app-nav">
+    <div class="app-navbar-inner">
+        <a class="app-navbar-brand" href="{% url 'search_main' %}"><span class="dot"></span> ꓘamerka</a>
+        <ul>
+            <li><a href="{% url 'search_main' %}">Search</a></li>
+            <li><a href="{% url 'index' %}">Dashboard</a></li>
+            <li><a href="{% url 'devices' %}">Devices</a></li>
+            <li><a href="{% url 'history' %}">History</a></li>
+            <li><a href="{% url 'map' %}">Map</a></li>
+            <li><a href="{% url 'gallery' %}">Gallery</a></li>
+            <li><a href="{% url 'sources' %}">Sources</a></li>
+            <li><a href="/admin/logout/">Log out</a></li>
+        </ul>
+    </div>
+</nav>
+<script>
+(function () {
+    // Purely cosmetic: highlight the nav link matching the current page.
+    // Does not alter any href/url and never touches app logic.
+    try {
+        var here = window.location.pathname.replace(/\/+$/, '') || '/';
+        var links = document.querySelectorAll('#app-nav ul li a');
+        for (var i = 0; i < links.length; i++) {
+            var href = links[i].getAttribute('href');
+            if (!href || href.indexOf('/admin/') === 0) continue;
+            var path = href.replace(/\/+$/, '') || '/';
+            if (path === here || (path !== '/' && here.indexOf(path) === 0)) {
+                links[i].classList.add('km-active');
+            }
+        }
+    } catch (e) {}
+})();
+</script>

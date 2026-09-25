@@ -130,10 +130,12 @@ font-size: 22px;
     <title>Search - ꓘamerka</title>
 
     <link href="{% static 'css/search.css'  %}" rel="stylesheet" media="all">
+    <link rel="stylesheet" type="text/css" href="{% static 'css/kamerka-modern.css' %}"/>
 
 </head>
 
 <body>
+        {% include '_nav.html' %}
     <div class="page-wrapper bg-img-1 p-t-200 p-b-120" id="background">
 
         <div class="wrapper wrapper--w900">

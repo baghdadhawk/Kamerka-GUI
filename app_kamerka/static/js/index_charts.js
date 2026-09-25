@@ -26,8 +26,15 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
         $("#reportrange span").html(moment().subtract('days', 29).format('MMMM D, YYYY') + ' - ' + moment().format('MMMM D, YYYY'));
     }
 
+    /* Category (ICS/Coordinates/Healthcare) -> devices?category=<x> */
+    var dashboardCategoryToParam = {
+        "ICS": "ics",
+        "Coordinates": "coordinates",
+        "Healthcare": "healthcare"
+    };
+
     /* Donut dashboard chart */
-    Morris.Donut({
+    var dashboardDonut = Morris.Donut({
         labelColor: '#00E1FF',
         element: 'dashboard-donut-1',
         data: [
@@ -38,9 +45,15 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
         colors: ["#00E1FF", "#0064d7",'#ff00cd'],
         resize: true
     });
+    dashboardDonut.on('click', function(i, row){
+        var category = dashboardCategoryToParam[row.label];
+        if (category) {
+            window.location.href = '/devices?category=' + encodeURIComponent(category);
+        }
+    });
     /* END Donut dashboard chart */
     /* Bar dashboard chart */
-    Morris.Bar({
+    var dashboardBar = Morris.Bar({
         element: 'dashboard-bar-1',
         data: ports,
         xkey: 'port',
@@ -54,6 +67,11 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
         hideHover: true,
         resize: true,
         gridLineColor: '#0064d7'
+    });
+    dashboardBar.on('click', function(i, row){
+        if (row && row.port) {
+            window.location.href = '/devices?port=' + encodeURIComponent(row.port);
+        }
     });
     /* END Bar dashboard chart */
     
@@ -108,13 +126,18 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
         var colorScale = ['#f0f0f0', '#C8EEFF', '#0071A4', '#FFA500', '#ff0000'];
 
     var jvm_wm = new jvm.WorldMap({container: $('#dashboard-map-seles'),
-                                    map: 'world_mill_en', 
+                                    map: 'world_mill_en',
                                     backgroundColor: '#0a141d',
                                     regionsSelectable: true,
                                     regionStyle: {selected: {fill: '#ff00cd'},
                                                     initial: {fill: '#33414E'}},
                                     markerStyle: {initial: {fill: '#1caf9a',
                                                    stroke: '#1caf9a'}},
+                                    onRegionClick: function(e, code){
+                                        if (code) {
+                                            window.location.href = '/devices?country=' + encodeURIComponent(String(code).toUpperCase());
+                                        }
+                                    },
 //                                    markers: [{latLng: [50.27, 30.31], name: pies},
 //                                              {latLng: [52.52, 13.40], name: 'Berlin - 2'},
 //                                              {latLng: [48.85, 2.35], name: 'Paris - 1'},

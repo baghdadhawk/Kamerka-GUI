@@ -1,0 +1,687 @@
+/* ==========================================================================
+   Kamerka — modern re-skin layer
+   Loaded AFTER the legacy stylesheets (theme-default.css, main.css,
+   search.css, search_style.css) on every page, so these rules win.
+   This file only adds visuals on top of the existing DOM / classes used
+   by plugins.js, actions.js, index_charts.js, draw_charts_results.js,
+   search.js and the DataTables/Selectr/Morris/jvectormap/Google Maps
+   integrations. No selector that those scripts rely on is renamed here.
+   ========================================================================== */
+
+:root {
+  /* -- Design tokens ------------------------------------------------- */
+  --km-bg: #0a0d12;
+  --km-bg-elevated: #0e1218;
+  --km-surface: #141922;
+  --km-surface-2: #1a212c;
+  --km-surface-3: #20293533;
+  --km-border: #2a3341;
+  --km-border-soft: #232b37;
+
+  --km-text: #e7ecf3;
+  --km-text-dim: #aab4c4;
+  --km-text-muted: #7c8798;
+
+  --km-accent: #00e1ff;
+  --km-accent-dim: #00b8d1;
+  --km-accent-2: #ff2fd1;
+  --km-success: #22c58b;
+  --km-warning: #ffb020;
+  --km-danger: #ff5050;
+
+  --km-radius-sm: 6px;
+  --km-radius: 10px;
+  --km-radius-lg: 14px;
+
+  --km-space-1: 4px;
+  --km-space-2: 8px;
+  --km-space-3: 12px;
+  --km-space-4: 16px;
+  --km-space-5: 24px;
+  --km-space-6: 32px;
+
+  --km-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --km-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --km-shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+  --km-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --km-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono",
+    Menlo, monospace;
+
+  --km-nav-height: 56px;
+}
+
+/* Optional light fallback — the app is dark-first, this only softens a
+   forced light preference slightly rather than fighting it. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --km-bg: #0a0d12;
+    --km-bg-elevated: #0e1218;
+    --km-surface: #141922;
+    --km-surface-2: #1a212c;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  background: var(--km-bg) !important;
+}
+
+body {
+  color: var(--km-text);
+  font-family: var(--km-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--km-accent);
+  color: #001217;
+}
+
+a { color: var(--km-accent); }
+a:hover { color: var(--km-accent-2); }
+
+:focus-visible {
+  outline: 2px solid var(--km-accent);
+  outline-offset: 2px;
+}
+
+/* ==========================================================================
+   App bar (_nav.html)
+   ========================================================================== */
+
+#app-nav {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: block;
+  background: linear-gradient(180deg, #10141c 0%, #0c0f15 100%);
+  border-bottom: 1px solid var(--km-border);
+  box-shadow: var(--km-shadow-sm);
+  font-family: var(--km-font);
+}
+
+#app-nav .app-navbar-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--km-space-4);
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 var(--km-space-5);
+  min-height: var(--km-nav-height);
+  flex-wrap: wrap;
+}
+
+#app-nav .app-navbar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--km-space-2);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--km-text) !important;
+  text-decoration: none;
+  padding: var(--km-space-2) 0;
+  white-space: nowrap;
+}
+
+#app-nav .app-navbar-brand:hover {
+  color: var(--km-accent) !important;
+}
+
+#app-nav .app-navbar-brand .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--km-accent);
+  box-shadow: 0 0 8px var(--km-accent);
+}
+
+#app-nav ul {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--km-space-1);
+  margin: 0;
+  padding: 0;
+  flex: 1 1 auto;
+}
+
+#app-nav ul li {
+  display: flex;
+}
+
+#app-nav ul li a {
+  display: inline-flex;
+  align-items: center;
+  color: var(--km-text-dim) !important;
+  text-decoration: none !important;
+  font-size: 0.88rem;
+  font-weight: 500;
+  padding: var(--km-space-2) var(--km-space-3);
+  border-radius: var(--km-radius-sm);
+  transition: color 0.15s ease, background-color 0.15s ease;
+  white-space: nowrap;
+}
+
+#app-nav ul li a:hover {
+  color: var(--km-text) !important;
+  background: var(--km-surface-2);
+}
+
+#app-nav ul li a.km-active {
+  color: #001217 !important;
+  background: var(--km-accent);
+  font-weight: 600;
+}
+
+/* Push the logout link to the right without changing markup order. */
+#app-nav ul li:last-child {
+  margin-left: auto;
+}
+
+#app-nav ul li:last-child a {
+  color: var(--km-text-muted) !important;
+  border: 1px solid var(--km-border);
+}
+
+#app-nav ul li:last-child a:hover {
+  color: var(--km-danger) !important;
+  border-color: var(--km-danger);
+  background: transparent;
+}
+
+@media (max-width: 900px) {
+  #app-nav .app-navbar-inner { padding: var(--km-space-2) var(--km-space-3); }
+  #app-nav ul { gap: 0; }
+  #app-nav ul li a { padding: var(--km-space-2); font-size: 0.82rem; }
+}
+
+/* ==========================================================================
+   Layout — legacy admin-template chrome is neutralised in favour of the
+   top app bar; the sidebar DOM stays untouched (only hidden) in case any
+   script probes it.
+   ========================================================================== */
+
+.page-sidebar { display: none !important; }
+
+.page-container { background: transparent; }
+
+.page-content {
+  margin-left: 0 !important;
+  width: 100% !important;
+  background: transparent;
+}
+
+.page-content-wrap {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: var(--km-space-5);
+}
+
+.x-navigation.x-navigation-horizontal.x-navigation-panel {
+  background: transparent;
+  border: none;
+  margin: 0 0 var(--km-space-4) 0;
+  padding: 0;
+}
+
+.x-navigation.x-navigation-horizontal.x-navigation-panel h1,
+.x-navigation.x-navigation-horizontal.x-navigation-panel center h1 {
+  color: var(--km-text) !important;
+  text-align: left !important;
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: var(--km-space-2) 0 0 0;
+  padding: 0;
+}
+
+.breadcrumb {
+  background: transparent;
+  padding: 0 0 var(--km-space-4) 0;
+  margin: 0 0 var(--km-space-2) 0;
+  list-style: none;
+}
+
+.page-title h2 {
+  color: var(--km-text);
+  font-weight: 700;
+  margin: 0 0 var(--km-space-4) 0;
+}
+
+/* Shodan progress bar on the dashboard */
+.progress-wrapper {
+  background: var(--km-surface-2);
+  border-radius: var(--km-radius-sm);
+  overflow: hidden;
+  height: 10px;
+  border: 1px solid var(--km-border);
+}
+
+.progress-wrapper .progress-bar {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+#progress-bar-message {
+  font-size: 0.85rem;
+  margin-top: var(--km-space-1);
+}
+
+/* ==========================================================================
+   Cards (.panel.panel-default) and stat tiles (.widget)
+   ========================================================================== */
+
+.panel {
+  background: var(--km-surface);
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  box-shadow: var(--km-shadow-sm);
+  margin-bottom: var(--km-space-5);
+  overflow: hidden;
+}
+
+.panel.panel-default { border-color: var(--km-border); }
+
+.panel-heading {
+  background: var(--km-surface-2);
+  border-bottom: 1px solid var(--km-border-soft);
+  padding: var(--km-space-3) var(--km-space-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--km-space-2);
+}
+
+.panel-heading h3,
+.panel-title,
+.panel-title-box h3 {
+  margin: 0;
+  color: var(--km-text) !important;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.panel-heading a { color: var(--km-text) !important; }
+.panel-heading a:hover { color: var(--km-accent) !important; }
+
+.panel-body {
+  padding: var(--km-space-4);
+  background: var(--km-surface) !important;
+  color: var(--km-text-dim);
+}
+
+.panel-body.padding-0 { padding: 0; }
+.panel-body[style*="background-color:#0a141d"],
+.panel-body[style*="background-color: #0a141d"] {
+  background: var(--km-surface) !important;
+}
+
+.chart-holder { background: var(--km-surface) !important; }
+
+/* Tabs used inside panels (results / device pages) */
+.panel.tabs .nav-tabs {
+  background: var(--km-surface-2);
+  border-bottom: 1px solid var(--km-border);
+  margin: 0;
+}
+
+.panel.tabs .nav-tabs > li > a {
+  color: var(--km-text-dim);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+}
+
+.panel.tabs .nav-tabs > li.active > a,
+.panel.tabs .nav-tabs > li.active > a:hover,
+.panel.tabs .nav-tabs > li.active > a:focus {
+  color: var(--km-bg) !important;
+  background: var(--km-accent) !important;
+  border: none;
+}
+
+/* Stat tiles on the dashboard */
+.row .widget {
+  background: var(--km-surface);
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  box-shadow: var(--km-shadow-sm);
+  color: var(--km-text);
+}
+
+.widget.widget-item-icon {
+  display: flex;
+  align-items: center;
+  gap: var(--km-space-3);
+  padding: var(--km-space-4);
+}
+
+.widget-item-left {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: var(--km-radius);
+  background: rgba(0, 225, 255, 0.12);
+  color: var(--km-accent);
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.widget-int, .widget-int.num-count {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--km-text);
+  line-height: 1.15;
+}
+
+.widget-title {
+  color: var(--km-text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.widget-big-int.plugin-clock {
+  color: var(--km-accent);
+  font-weight: 700;
+  text-align: center;
+}
+
+.widget-subtitle.plugin-date {
+  color: var(--km-text-muted);
+  text-align: center;
+  font-size: 0.8rem;
+}
+
+.widget-carousel { padding: var(--km-space-4); }
+
+/* ==========================================================================
+   Tables / DataTables
+   ========================================================================== */
+
+table.table, table.datatable {
+  color: var(--km-text-dim);
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+table.table > thead > tr > th,
+table.datatable thead th {
+  background: var(--km-surface-2);
+  color: var(--km-text);
+  border-bottom: 1px solid var(--km-border) !important;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: var(--km-space-2) var(--km-space-3);
+  white-space: nowrap;
+}
+
+table.table > tbody > tr > td,
+table.datatable tbody td {
+  border-top: 1px solid var(--km-border-soft) !important;
+  padding: var(--km-space-2) var(--km-space-3);
+  vertical-align: middle;
+}
+
+table.table > tbody > tr:hover > td,
+table.datatable tbody tr:hover > td {
+  background: rgba(0, 225, 255, 0.06);
+}
+
+table.datatable tbody tr:nth-child(even) > td {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.dataTables_wrapper { color: var(--km-text-dim); }
+
+.dataTables_wrapper .dataTables_length,
+.dataTables_wrapper .dataTables_filter,
+.dataTables_wrapper .dataTables_info,
+.dataTables_wrapper .dataTables_paginate {
+  color: var(--km-text-dim);
+  margin: var(--km-space-2) 0;
+}
+
+.dataTables_wrapper .dataTables_filter input,
+.dataTables_wrapper .dataTables_length select {
+  background: var(--km-surface-2);
+  border: 1px solid var(--km-border);
+  color: var(--km-text);
+  border-radius: var(--km-radius-sm);
+  padding: 4px 8px;
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button {
+  color: var(--km-text-dim) !important;
+  border-radius: var(--km-radius-sm);
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button.current,
+.dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+  background: var(--km-accent) !important;
+  border-color: var(--km-accent) !important;
+  color: var(--km-bg) !important;
+}
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+
+.btn, button, .btn-submit {
+  border-radius: var(--km-radius-sm);
+}
+
+.btn-primary,
+.btn.btn-primary.active,
+button.btn-primary {
+  background: var(--km-accent) !important;
+  border-color: var(--km-accent) !important;
+  color: #001217 !important;
+  font-weight: 600;
+}
+
+.btn-primary:hover, button.btn-primary:hover {
+  background: var(--km-accent-dim) !important;
+  border-color: var(--km-accent-dim) !important;
+}
+
+/* ==========================================================================
+   Honeypot badges / active-filter chips
+   ========================================================================== */
+
+.km-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.km-badge-danger {
+  background: rgba(255, 80, 80, 0.16);
+  color: #ff8787;
+  border: 1px solid rgba(255, 80, 80, 0.4);
+}
+
+.km-badge-success {
+  background: rgba(34, 197, 139, 0.14);
+  color: #4fe0b3;
+  border: 1px solid rgba(34, 197, 139, 0.35);
+}
+
+#active-filters,
+.km-filters {
+  background: var(--km-surface-2);
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  padding: var(--km-space-3) var(--km-space-4);
+  margin-bottom: var(--km-space-3);
+  color: var(--km-text-dim);
+}
+
+#active-filters strong { color: var(--km-text); }
+
+#active-filters ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--km-space-2);
+  padding: 0;
+  margin: var(--km-space-2) 0;
+}
+
+#active-filters ul li {
+  background: rgba(0, 225, 255, 0.1);
+  border: 1px solid rgba(0, 225, 255, 0.3);
+  color: var(--km-accent);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.78rem;
+}
+
+#active-filters a {
+  color: var(--km-danger);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+#active-filters a:hover { text-decoration: underline; }
+
+/* ==========================================================================
+   Search page (search_main.html) — tabs, selects, checkboxes
+   ========================================================================== */
+
+.page-wrapper.bg-img-1 {
+  background-color: var(--km-bg) !important;
+  min-height: 100vh;
+}
+
+.wrapper.wrapper--w900 > h1 {
+  color: var(--km-text);
+  text-align: center;
+}
+
+.card.card-4 {
+  background: var(--km-surface) !important;
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius-lg);
+  box-shadow: var(--km-shadow-lg);
+}
+
+.tab-list {
+  border-bottom: 1px solid var(--km-border);
+}
+
+.tab-list__link {
+  color: var(--km-text-dim) !important;
+}
+
+.tab-list__item.active .tab-list__link,
+.tab-list__link:hover {
+  color: var(--km-accent) !important;
+}
+
+.tab-list__item.active .tab-list__link::after {
+  background: var(--km-accent) !important;
+}
+
+.selectr-selected {
+  background: var(--km-surface-2) !important;
+  border-color: var(--km-border) !important;
+  color: var(--km-text) !important;
+}
+
+.selectr-placeholder { color: var(--km-text-muted) !important; }
+
+.selectr-options-container {
+  background: var(--km-surface-2) !important;
+  border-color: var(--km-border) !important;
+}
+
+.selectr-option { color: var(--km-text-dim) !important; }
+.selectr-option.selected, .selectr-option.active {
+  background: var(--km-accent) !important;
+  color: var(--km-bg) !important;
+}
+
+.selectr-tag {
+  background: var(--km-accent) !important;
+  color: var(--km-bg) !important;
+}
+
+.dropdown-toggle.btn-default {
+  background: var(--km-surface-2) !important;
+  border-color: var(--km-border) !important;
+  color: var(--km-text) !important;
+}
+
+.dropdown-menu {
+  background: var(--km-surface-2) !important;
+  border-color: var(--km-border) !important;
+}
+
+#estimate_result { color: var(--km-accent) !important; }
+
+/* File upload dropzone */
+.file-upload { background: transparent !important; }
+
+.image-upload-wrap {
+  background: var(--km-surface-2);
+  border-radius: var(--km-radius);
+}
+
+/* ==========================================================================
+   Device page — intel block, honeypot panel
+   ========================================================================== */
+
+pre, pre code {
+  font-family: var(--km-mono);
+  font-size: 0.82rem;
+  background: var(--km-bg-elevated) !important;
+  border: 1px solid var(--km-border) !important;
+  border-radius: var(--km-radius);
+  color: var(--km-text-dim);
+}
+
+details summary {
+  cursor: pointer;
+  color: var(--km-accent);
+  font-weight: 600;
+  padding: var(--km-space-1) 0;
+}
+
+details[open] summary { margin-bottom: var(--km-space-2); }
+
+/* ==========================================================================
+   Gallery
+   ========================================================================== */
+
+.screenshot {
+  border-radius: var(--km-radius-sm);
+  border: 1px solid var(--km-border);
+}
+
+/* ==========================================================================
+   Maps / jvectormap containers
+   ========================================================================== */
+
+#google_world_map,
+#dashboard-map-seles {
+  border-radius: var(--km-radius);
+  overflow: hidden;
+  border: 1px solid var(--km-border);
+}

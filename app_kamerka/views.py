@@ -14,11 +14,13 @@ from django.http import HttpResponseRedirect
 from django.shortcuts import render
 
 from app_kamerka import forms
-from app_kamerka.models import Search, Device, DeviceNearby, FlickrNearby, ShodanScan, BinaryEdgeScore, Whois, \
-    TwitterNearby, Bosch
-from kamerka.tasks import shodan_search, devices_nearby, twitter_nearby_task, flickr, shodan_scan_task, \
+from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryEdgeScore, Whois, \
+    Bosch
+from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
     binary_edge_scan, whoisxml, check_credits, send_to_field_agent_task, nmap_scan, validate_nmap, validate_maxmind, scan, \
-    exploit, build_family_selection, count_devices
+    exploit, build_family_selection, count_devices, honeyscore
+from app_kamerka.banner_utils import looks_like_generic_http_response
+from app_kamerka.honeypot import HONEYPOT_THRESHOLD
 
 
 # Create your views here.
@@ -324,7 +326,59 @@ def index(request):
 
 
 def devices(request):
+    """List devices, optionally filtered by GET params so infographics
+    (ports/type/category/country/vuln charts) and the history/search pages
+    can link straight into a filtered device list.
+
+    Supported params (all optional, combined with AND; unknown/empty
+    params are ignored):
+      - port: exact match on Device.port
+      - type: exact match on Device.type (device family)
+      - category: exact match on Device.category (ics/healthcare/infra/coordinates)
+      - country: match on Device.country_code (case-insensitive)
+      - search_id: restrict to a single Search's devices
+      - vuln: substring match against the stored vulns (a CVE id)
+      - honeypot: truthy (e.g. "1") restricts to devices whose local
+        heuristic honeypot_score is at/above HONEYPOT_THRESHOLD.
+    """
     all_devices = Device.objects.all()
+
+    filters = {}
+
+    port = request.GET.get('port')
+    if port:
+        all_devices = all_devices.filter(port=port)
+        filters['port'] = port
+
+    device_type = request.GET.get('type')
+    if device_type:
+        all_devices = all_devices.filter(type=device_type)
+        filters['type'] = device_type
+
+    category = request.GET.get('category')
+    if category:
+        all_devices = all_devices.filter(category=category)
+        filters['category'] = category
+
+    country = request.GET.get('country')
+    if country:
+        all_devices = all_devices.filter(country_code__iexact=country)
+        filters['country'] = country
+
+    search_id = request.GET.get('search_id')
+    if search_id:
+        all_devices = all_devices.filter(search_id=search_id)
+        filters['search_id'] = search_id
+
+    vuln = request.GET.get('vuln')
+    if vuln:
+        all_devices = all_devices.filter(vulns__icontains=vuln)
+        filters['vuln'] = vuln
+
+    honeypot = request.GET.get('honeypot')
+    if honeypot:
+        all_devices = all_devices.filter(honeypot_score__gte=HONEYPOT_THRESHOLD)
+        filters['honeypot'] = honeypot
 
     for i in all_devices:
         try:
@@ -332,7 +386,7 @@ def devices(request):
         except:
             pass
 
-    context = {"devices": all_devices}
+    context = {"devices": all_devices, "filters": filters}
 
     return render(request, "devices.html", context=context)
 
@@ -399,7 +453,8 @@ def results(request, id):
                "vulns": sort,
                "category": categories_list,
                "city": cities_list,
-               'google_maps_key': google_maps_key}
+               'google_maps_key': google_maps_key,
+               'search_id': id}
 
     return render(request, 'results.html', context)
 
@@ -476,26 +531,47 @@ def search_estimate(request):
 def device(request, id, device_id, ip):
     all_devices = Device.objects.get(search_id=id, id=device_id)
     nearby = DeviceNearby.objects.filter(device_id=all_devices.id)
-    flickr = FlickrNearby.objects.filter(device_id=all_devices.id)
     shodan = ShodanScan.objects.filter(device_id=all_devices.id)
     google_maps_key = keys['keys']['google_maps']
 
     try:
-        all_devices.indicator = ast.literal_eval(all_devices.indicator)
-    except:
-        pass
+        parsed_indicator = ast.literal_eval(all_devices.indicator)
+    except Exception:
+        parsed_indicator = all_devices.indicator
+
+    if isinstance(parsed_indicator, (list, tuple, set)):
+        indicator_list = list(parsed_indicator)
+    elif parsed_indicator:
+        indicator_list = [parsed_indicator]
+    else:
+        indicator_list = []
+
+    all_devices.indicator = indicator_list
+
+    # Only keep truthy/non-blank entries so an empty or all-blank indicator
+    # list renders as "no indicators" instead of empty bullet noise.
+    meaningful_indicators = [i for i in indicator_list if i]
 
     if all_devices.type in passwds.keys():
         info = passwds[all_devices.type]
     else:
         info = ""
 
+    try:
+        honeypot_reasons = json.loads(all_devices.honeypot_reasons) if all_devices.honeypot_reasons else []
+    except Exception:
+        honeypot_reasons = []
+
     context = {'device': all_devices,
                'nearby': nearby,
-               'flickr': flickr,
                "shodan": shodan,
                'google_maps_key': google_maps_key,
-               "passwd": info}
+               "passwd": info,
+               "indicators": meaningful_indicators,
+               "banner_warning": looks_like_generic_http_response(all_devices.data),
+               "honeypot_reasons": honeypot_reasons,
+               "honeypot_threshold": HONEYPOT_THRESHOLD,
+               "is_likely_honeypot": all_devices.honeypot_score >= HONEYPOT_THRESHOLD}
 
     return render(request, 'device.html', context)
 
@@ -511,52 +587,6 @@ def nearby(request, id, query):
 
 def sources(request):
     return render(request, 'sources.html', {})
-
-
-def twitter_nearby(request, id):
-    if is_ajax(request) and request.method == 'GET':
-
-        tw = TwitterNearby.objects.filter(device_id=id)
-
-        if tw:
-            print('already')
-            return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
-
-        a = Device.objects.filter(id=id)
-        tw_task = twitter_nearby_task.delay(lat=a[0].lat, lon=a[0].lon, id=id)
-        return HttpResponse(json.dumps({'task_id': tw_task.id}), content_type='application/json')
-    else:
-        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
-
-
-def twitter_show(request, id):
-    if is_ajax(request) and request.method == 'GET':
-        a = TwitterNearby.objects.filter(device_id=id)
-
-        response_data = serializers.serialize('json', a)
-        if not response_data:
-            return HttpResponse(json.dumps({'Error': "No records"}), content_type='application/json')
-        else:
-            return HttpResponse(response_data, content_type="application/json")
-    else:
-        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
-
-
-def flickr_nearby(request, id):
-    if is_ajax(request) and request.method == 'GET':
-
-        fl = FlickrNearby.objects.filter(device_id=id)
-
-        if fl:
-            print('already')
-            return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
-
-        a = Device.objects.get(id=id)
-
-        flickr_task = flickr.delay(lat=a.lat, lon=a.lon, id=id)
-        return HttpResponse(json.dumps({'task_id': flickr_task.id}), content_type='application/json')
-    else:
-        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
 
 
 def shodan_scan(request, id):
@@ -635,28 +665,6 @@ def exploit_dev(request, id):
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
-def get_flickr_results(request, id):
-    if is_ajax(request) and request.method == 'GET':
-        nearby_flickr = FlickrNearby.objects.filter(device_id=id)
-
-        response_data = serializers.serialize('json', nearby_flickr)
-
-        return HttpResponse(response_data, content_type="application/json")
-    else:
-        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
-
-
-def get_flickr_coordinates(request, id):
-    if is_ajax(request) and request.method == 'GET':
-        nearby_flickr = FlickrNearby.objects.filter(device_id=id)
-
-        response_data = serializers.serialize('json', nearby_flickr)
-
-        return HttpResponse(response_data, content_type="application/json")
-    else:
-        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
-
-
 def get_nearby_devices_coordinates(request, id):
     if is_ajax(request) and request.method == 'GET':
         nearby_devices = DeviceNearby.objects.filter(device_id=id)
@@ -723,6 +731,24 @@ def whois(request, id):
         return HttpResponse(json.dumps({'task_id': wh_task.id}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
+
+
+def get_honeyscore(request, id):
+    """On-demand Shodan HoneyScore check (the 2nd, network-based honeypot
+    signal, complementing the automatic local heuristic in honeypot_score).
+    Synchronous (not a celery task): Shodan's honeyscore call is a single
+    lightweight request, unlike the paginated scan/search calls elsewhere in
+    this app. Best-effort: kamerka.tasks.honeyscore() itself never raises,
+    it returns None on any failure.
+    """
+    if is_ajax(request) and request.method == 'GET':
+        device1 = Device.objects.get(id=id)
+        result = honeyscore(device1.ip)
+        device1.honeyscore = result
+        device1.save()
+        return HttpResponse(json.dumps({'honeyscore': result}), content_type='application/json')
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def get_whois(request, id):
