@@ -685,3 +685,163 @@ details[open] summary { margin-bottom: var(--km-space-2); }
   overflow: hidden;
   border: 1px solid var(--km-border);
 }
+
+/* ==========================================================================
+   Devices/results tables — toolbar, export/honeypot buttons, CVE badges,
+   truncated cells, column-visibility dropdown
+   ========================================================================== */
+
+.km-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--km-space-2);
+  margin-bottom: var(--km-space-3);
+}
+
+.km-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--km-radius-sm);
+  border: 1px solid var(--km-border);
+  background: var(--km-surface-2);
+  color: var(--km-text) !important;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none !important;
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease, background .15s ease;
+}
+
+.km-btn:hover {
+  border-color: var(--km-accent);
+  color: var(--km-accent) !important;
+  background: rgba(0, 225, 255, 0.08);
+}
+
+.km-btn-active {
+  border-color: var(--km-accent);
+  color: var(--km-accent) !important;
+  background: rgba(0, 225, 255, 0.12);
+}
+
+.km-btn-danger:hover {
+  border-color: var(--km-danger);
+  color: var(--km-danger) !important;
+  background: rgba(255, 80, 80, 0.08);
+}
+
+.km-cve-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  margin: 1px 3px 1px 0;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: rgba(255, 176, 32, 0.14);
+  color: #ffcb70;
+  border: 1px solid rgba(255, 176, 32, 0.4);
+  text-decoration: none !important;
+  white-space: nowrap;
+}
+
+.km-cve-badge:hover {
+  background: rgba(255, 176, 32, 0.28);
+  color: #ffd98f !important;
+}
+
+.km-icon-yes { color: var(--km-success); font-weight: 700; }
+.km-icon-no { color: var(--km-text-muted); font-weight: 700; }
+
+.km-truncate {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.km-coldrop {
+  position: relative;
+  display: inline-block;
+}
+
+.km-coldrop-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 40;
+  margin-top: 4px;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--km-surface);
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius-sm);
+  box-shadow: var(--km-shadow);
+  padding: var(--km-space-2);
+}
+
+.km-coldrop-menu.open { display: block; }
+
+.km-coldrop-menu label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--km-text-dim);
+  cursor: pointer;
+}
+
+.km-coldrop-menu label:hover { color: var(--km-text); }
+
+/* ==========================================================================
+   Pre-search credit-guard (search_main.html)
+   ========================================================================== */
+
+.km-credit-line {
+  margin: var(--km-space-2) 0;
+  color: var(--km-text-dim);
+  font-size: 0.85rem;
+}
+
+.km-credit-warning {
+  color: var(--km-warning);
+  font-weight: 600;
+}
+
+.km-guard-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(5, 7, 10, 0.72);
+  align-items: center;
+  justify-content: center;
+}
+
+.km-guard-overlay.open { display: flex; }
+
+.km-guard-box {
+  background: var(--km-surface);
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius-lg);
+  box-shadow: var(--km-shadow-lg);
+  padding: var(--km-space-5);
+  max-width: 420px;
+  color: var(--km-text);
+}
+
+.km-guard-box h4 {
+  color: var(--km-warning);
+  margin-top: 0;
+}
+
+.km-guard-box .km-btn { margin-right: var(--km-space-2); margin-top: var(--km-space-3); }

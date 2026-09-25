@@ -135,6 +135,19 @@
                                 <div class="panel-heading">
                                     <h3 class="panel-title">Devices</h3>
 
+                                    <div class="km-toolbar">
+                                        <a class="km-btn" href="{% url 'export_devices' %}?{{ export_qs }}&format=csv">&#8681; Export CSV</a>
+                                        <a class="km-btn" href="{% url 'export_devices' %}?{{ export_qs }}&format=json">&#8681; Export JSON</a>
+                                        <span style="width:1px; align-self:stretch; background:var(--km-border);"></span>
+                                        <a class="km-btn" href="{% url 'results' id=search_id %}?{{ honeypot_base_qs }}&honeypot=1">&#9888; Only honeypots</a>
+                                        <a class="km-btn km-btn-danger" href="{% url 'results' id=search_id %}?{{ honeypot_base_qs }}&hide_honeypot=1">&#128683; Hide honeypots</a>
+                                        <a class="km-btn" href="{% url 'results' id=search_id %}">All</a>
+                                        <span style="width:1px; align-self:stretch; background:var(--km-border);"></span>
+                                        <div class="km-coldrop">
+                                            <button type="button" class="km-btn" id="results-coldrop-btn">&#9776; Columns</button>
+                                            <div class="km-coldrop-menu" id="results-coldrop-menu"></div>
+                                        </div>
+                                    </div>
 
                                 </div>
                                 <div class="panel-body">
@@ -169,19 +182,19 @@
                                                     <td>                                     <a href="{% url 'device' id=device.search_id ip=device.ip device_id=device.id %}">
                                                         {{ device.ip }}</a></td>
                                                     <td>{{ device.type }}</td>
-                                                    <td>{%if device.type == "NMAP" %} {{device.port}} {% else %} {{ device.product }}{% endif %}</td>
+                                                    <td><span class="km-truncate" title="{%if device.type == "NMAP" %}{{device.port}}{% else %}{{ device.product }}{% endif %}">{%if device.type == "NMAP" %} {{device.port}} {% else %} {{ device.product }}{% endif %}</span></td>
                                                     <td>{{ device.port }}</td>
                                                     <td>{{ device.city }}</td>
                                                     <td>{{ device.lat }}</td>
                                                     <td>{{ device.lon }}</td>
-                                                    <td>{{ device.vulns|slice:"1:-1" }}</td>
-                                                    <td>{% for a in device.indicator %}{{ a }} {% endfor %}</td>
-                                                    <td>{{ device.located }}</td>
-                                                   <td>{{ device.exploited_scanned }}</td>
+                                                    <td>{% for cve in device.cves %}<a class="km-cve-badge" href="https://nvd.nist.gov/vuln/detail/{{ cve }}" target="_blank" rel="noopener">{{ cve }}</a>{% endfor %}</td>
+                                                    <td><span class="km-truncate" title="{% for a in device.indicator %}{{ a }} {% endfor %}">{% for a in device.indicator %}{{ a }} {% endfor %}</span></td>
+                                                    <td>{% if device.located %}<span class="km-icon-yes">&#10003;</span>{% else %}<span class="km-icon-no">&#10007;</span>{% endif %}</td>
+                                                   <td>{% if device.exploited_scanned %}<span class="km-icon-yes">&#10003;</span>{% else %}<span class="km-icon-no">&#10007;</span>{% endif %}</td>
                                                    {% if device.honeypot_score >= 50 %}
-                                                   <td><span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:2px 6px; border-radius:3px;">&#9888; honeypot ({{ device.honeypot_score }})</span></td>
+                                                   <td data-order="{{ device.honeypot_score }}"><span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:2px 6px; border-radius:3px;">&#9888; honeypot ({{ device.honeypot_score }})</span></td>
                                                    {% else %}
-                                                   <td></td>
+                                                   <td data-order="{{ device.honeypot_score }}"></td>
                                                    {% endif %}
 
 
@@ -705,6 +718,39 @@ function initialize() {
         <script type="text/javascript" src="{% static 'js/actions.js' %}"></script>
         <script type="text/javascript" src="{% static 'js/draw_charts_results.js' %}"></script>
                 <script>drawCharts({{ports|safe}}, {{city|safe}},{{category|safe}}, "{{ search_id }}");</script>
+
+        <script type="text/javascript">
+        // Lightweight column-visibility toggle for the devices table, built
+        // entirely on the already-bundled DataTables API (no new library).
+        $(document).ready(function() {
+            var $table = $('#customers2');
+            if ($table.length === 0) return;
+
+            var table = $table.DataTable();
+
+            var $menu = $('#results-coldrop-menu');
+            table.columns().every(function(index) {
+                var title = $(this.header()).text().trim() || ('Column ' + (index + 1));
+                var $label = $('<label></label>');
+                var $checkbox = $('<input type="checkbox" checked>').data('column-index', index);
+                $checkbox.on('change', function() {
+                    table.column(index).visible($(this).is(':checked'));
+                });
+                $label.append($checkbox).append(' ' + title);
+                $menu.append($label);
+            });
+
+            $('#results-coldrop-btn').on('click', function(e) {
+                e.stopPropagation();
+                $menu.toggleClass('open');
+            });
+            $(document).on('click', function(e) {
+                if (!$(e.target).closest('.km-coldrop').length) {
+                    $menu.removeClass('open');
+                }
+            });
+        });
+        </script>
 
         <!-- END TEMPLATE -->
 
