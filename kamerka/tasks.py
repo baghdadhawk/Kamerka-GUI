@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import re
 
@@ -30,6 +31,15 @@ from app_kamerka import exploits
 from app_kamerka.models import Device, DeviceNearby, Search, ShodanScan, BinaryEdgeScore, \
     Whois, Bosch
 from app_kamerka.honeypot import score_device
+from app_kamerka.banner_utils import looks_like_generic_http_response
+
+logger = logging.getLogger(__name__)
+
+# Categories where a generic/HTTP-error banner classified under a specific
+# device family is suspicious enough to flag as a likely false positive (see
+# _save_device_from_result). "coordinates" and "NMAP" are left out: those
+# aren't family classifications in the same sense.
+_FALSE_POSITIVE_SUSPECT_CATEGORIES = ("ics", "healthcare", "infra")
 
 healthcare_queries = {"zoll": "http.favicon.hash:-236942626",
                       'dicom': "dicom",
@@ -611,7 +621,7 @@ def get_keys():
 
         return keys_json
     except Exception as e:
-        print(e)
+        logger.warning("Failed to load keys file %s: %s", KEYS_FILE, e)
 
 
 keys = get_keys()
@@ -629,15 +639,15 @@ def devices_nearby(lat, lon, id, query):
     try:
         # Search Shodan
         results = api.search("geo:" + lat + "," + lon + ",15 " + query)
-    except:
+    except Exception:
         fail = 1
-        print('fail1')
+        logger.info("Shodan search failed once (retrying): geo:%s,%s,15 %s", lat, lon, query)
 
     if fail == 1:
         try:
             results = api.search("geo:" + lat + "," + lon + ",15 " + query)
         except Exception as e:
-            print(e)
+            logger.warning("Shodan search retry failed for geo:%s,%s,15 %s: %s", lat, lon, query, e)
 
     try:  # Show the results
         total = len(results['matches'])
@@ -656,7 +666,7 @@ def devices_nearby(lat, lon, id, query):
 
         return {'current': total, 'total': total, 'percent': 100}
     except Exception as e:
-        print(e)
+        logger.warning("devices_nearby failed to process results: %s", e)
 
 
 @shared_task(bind=True)
@@ -718,7 +728,7 @@ def shodan_search(self, fk, country=None, coordinates=None, ics=None, healthcare
                                              query_cache=query_cache)
                 progress_recorder.set_progress(c + 1, total=total)
             except Exception as e:
-                print(e)
+                logger.exception("Grouped Shodan search failed for fk=%s: %s", fk, e)
             c += 1
 
         for key, query, category in rest:
@@ -729,7 +739,7 @@ def shodan_search(self, fk, country=None, coordinates=None, ics=None, healthcare
                                      max_pages=max_pages, query_cache=query_cache)
                 progress_recorder.set_progress(c + 1, total=total)
             except Exception as e:
-                print(e)
+                logger.exception("Shodan search failed for fk=%s query=%r: %s", fk, query, e)
             c += 1
 
     if coordinates:
@@ -743,8 +753,8 @@ def shodan_search(self, fk, country=None, coordinates=None, ics=None, healthcare
                                          coordinates=coordinates, all_results=all_results,
                                          max_pages=max_pages, query_cache=query_cache)
                     progress_recorder.set_progress(c + 1, total=total)
-                except:
-                    pass
+                except Exception as e:
+                    logger.exception("Coordinates Shodan search failed for fk=%s query=%r: %s", fk, i, e)
     return result
 
 
@@ -757,7 +767,7 @@ def check_credits():
         a = api.info()
         keys_list.append(a['query_credits'])
     except Exception as e:
-        print(e)
+        logger.warning("Failed to fetch Shodan credits: %s", e)
 
     try:
         be_key = keys['keys']['binaryedge']
@@ -766,7 +776,7 @@ def check_credits():
         req_json = json.loads(req.content)
         keys_list.append(req_json['requests_left'])
     except Exception as e:
-        print(e)
+        logger.warning("Failed to fetch BinaryEdge credits: %s", e)
 
     return keys_list
 
@@ -806,7 +816,7 @@ def honeyscore(ip):
         result = api.labs.honeyscore(ip)
         return float(result)
     except Exception as e:
-        print(e)
+        logger.warning("honeyscore(%s) failed: %s", ip, e)
         return None
 
 
@@ -981,7 +991,24 @@ def _save_device_from_result(search, result, search_type, category, query):
         device.honeypot_score = honeypot_score
         device.honeypot_reasons = json.dumps(honeypot_reasons)
     except Exception as e:
-        print(e)
+        logger.warning("honeypot scoring failed for %s: %s", result.get('ip_str'), e)
+
+    # Suspected-false-positive flag: a generic/HTTP-error banner (see
+    # banner_utils.looks_like_generic_http_response) classified under an
+    # ICS/healthcare/infra family, with no sign of that family anywhere in
+    # the banner itself. Conservative on purpose (favors false negatives):
+    # only fires when the banner is already flagged as generic AND the
+    # family name is nowhere in it. Persistent, non-destructive -- never
+    # blocks saving on error.
+    try:
+        if category in _FALSE_POSITIVE_SUSPECT_CATEGORIES and looks_like_generic_http_response(result.get('data', '')):
+            family_token = (search_type or "").strip().lower()
+            banner_lower = (result.get('data') or "").lower()
+            has_family_token = bool(family_token) and family_token in banner_lower
+            if not has_family_token:
+                device.suspected_false_positive = True
+    except Exception as e:
+        logger.warning("suspected_false_positive computation failed for %s: %s", result.get('ip_str'), e)
 
     device.save()
 
@@ -1019,11 +1046,11 @@ def _run_shodan_query(fk, query, on_result, country=None, coordinates=None, all_
     without hitting the Shodan API again.
     """
     SHODAN_API_KEY = keys['keys']['shodan']
-    print(query)
+    logger.info("Running Shodan query: %s", query)
 
     cache_key = (query, country, coordinates)
     if query_cache is not None and cache_key in query_cache:
-        print("Reusing cached results for duplicate query: " + query)
+        logger.info("Reusing cached results for duplicate query: %s", query)
         search = Search.objects.get(id=fk)
         for result in query_cache[cache_key]:
             on_result(search, result)
@@ -1060,31 +1087,31 @@ def _run_shodan_query(fk, query, on_result, country=None, coordinates=None, all_
                     results = api.search("country:" + country + " " + query, page)
                 break
             except Exception as e:
-                print('Shodan search failed (attempt %d/%d) for query %r: %s' %
-                     (attempt, SHODAN_MAX_ATTEMPTS, query, e))
+                logger.warning('Shodan search failed (attempt %d/%d) for query %r: %s',
+                              attempt, SHODAN_MAX_ATTEMPTS, query, e)
                 results = None
                 if attempt < SHODAN_MAX_ATTEMPTS:
                     time.sleep(min(2 ** attempt, SHODAN_BACKOFF_CAP_SECONDS))
 
         if results is None:
-            print("Giving up on query after %d attempts: %s" % (SHODAN_MAX_ATTEMPTS, query))
+            logger.warning("Giving up on query after %d attempts: %s", SHODAN_MAX_ATTEMPTS, query)
             break
 
         try:
             total = results['total']
 
             if total == 0:
-                print("no results")
+                logger.info("No results for query: %s", query)
                 break
         except Exception as e:
-            print(e)
+            logger.warning("Failed to read result total for query %r: %s", query, e)
             break
 
         pages = math.ceil(total / 100) + 1
         # Note: don't fold max_pages into `pages` here — the `page > max_pages`
         # guard at the top of the loop already caps the number of pages fetched,
         # and min()'ing it in interacts badly with the +1 sentinel above.
-        print("Pages: " + str(pages))
+        logger.info("Pages: %s", pages)
 
         for result in results['matches']:
             collected_matches.append(result)
@@ -1158,8 +1185,7 @@ def nmap_host_worker(host_arg, max_reader, search):
     hostname = host_arg.hostnames[0]
 
     a = max_reader.get(host_arg.address)
-    print(a['location']['latitude'])
-    print(a['location']['longitude'])
+    logger.info("nmap host %s location: %s, %s", host_arg.address, a['location']['latitude'], a['location']['longitude'])
     for ports in host_arg.services:
         if ports.state == 'open':
             ports_list.append(ports.port)
@@ -1167,7 +1193,7 @@ def nmap_host_worker(host_arg, max_reader, search):
             ports_list.append("None")
 
     ports_string = ', '.join(str(e) for e in ports_list)
-    print(ports_string)
+    logger.info("nmap host %s ports: %s", host_arg.address, ports_string)
     device = Device(search=search, ip=host_arg.address, product="", org="",
                     data="", port=ports_string, type="NMAP", city="NMAP",
                     lat=a['location']['latitude'], lon=a['location']['longitude'],
@@ -1188,7 +1214,7 @@ def validate_maxmind():
 def nmap_scan(self, file, fk):
     progress_recorder = ProgressRecorder(self)
     result = 0
-    print(os.getcwd() + file)
+    logger.info("nmap_scan reading file: %s", os.getcwd() + file)
     search = Search.objects.get(id=fk)
     max_reader = maxminddb.open_database('GeoLite2-City.mmdb')
     nmap_report = NmapParser.parse_fromfile(os.getcwd() + file)
@@ -1284,9 +1310,8 @@ def send_to_field_agent_task(id, notes):
             cve = af_details.vulns[1:][:-1]
         if af.indicator:
             indicator = af.indicator[2:][:-2]
-    except:
-        print("Not scanned")
-        pass
+    except Exception:
+        logger.info("Not scanned")
 
     user_key = paste_login(keys['keys']['pastebin_user'], keys['keys']['pastebin_password'],
                            keys['keys']['pastebin_dev_key'])
@@ -1303,7 +1328,7 @@ def send_to_field_agent_task(id, notes):
 
     merge_string = "ꓘ;" + lat + ";" + lon + ";" + ip + ";" + ports + ";" + org + ";" + type + ";" + cve + ";" + indicator + ";" + notes
 
-    print("\\xea\\x93\\x98amerka_" + af.ip)
+    logger.info("\\xea\\x93\\x98amerka_" + af.ip)
     if "\\xea\\x93\\x98amerka_" + af.ip in pastes.keys():
         delete_paste(keys['keys']['pastebin_dev_key'], user_key, pastes["\\xea\\x93\\x98amerka_" + af.ip])
         create_paste(keys['keys']['pastebin_dev_key'], user_key, "ꓘamerka_" + af.ip, merge_string)
@@ -1324,7 +1349,7 @@ def shodan_scan_task(id):
         results = api.host(device.ip)
         # Show the results
         total = len(results['ports'])
-        print(total)
+        logger.info("shodan_scan_task total ports: %s", total)
         for counter, i in enumerate(results['data']):
 
             if 'product' in i:
@@ -1345,12 +1370,12 @@ def shodan_scan_task(id):
         device1 = ShodanScan(device=device, products=product,
                              ports=ports, tags=tags, vulns=vulns)
         device1.save()
-        print(results['ports'])
+        logger.info("shodan_scan_task ports: %s", results['ports'])
 
         return {'current': total, 'total': total, 'percent': 100}
 
     except Exception as e:
-        print(e.args)
+        logger.warning("shodan_scan_task failed: %s", e.args)
 
 
 @shared_task(bind=False)
@@ -1397,16 +1422,15 @@ def scan(id):
         nm.run_background()
 
         while nm.is_running():
-            print("Nmap Scan running: ETC: {0} DONE: {1}%".format(nm.etc,
-                                                                  nm.progress))
+            logger.info("Nmap Scan running: ETC: %s DONE: %s%%", nm.etc, nm.progress)
             sleep(2)
 
         u = xmltodict.parse(nm.stdout)
-        print(u['nmaprun'])
+        logger.info("%s", u['nmaprun'])
 
         try:
             for i in u['nmaprun']['host']['ports']['port']['script']:
-                print(i)
+                logger.info("%s", i)
 
                 if i == "@output":
                     return_dict["ID"] = u['nmaprun']['host']['ports']['port']['script']["@id"]
@@ -1419,7 +1443,7 @@ def scan(id):
 
 
         except Exception as e:
-            print(e)
+            logger.warning("Nmap script scan failed to parse output: %s", e)
             return_dict["State"] = u['nmaprun']['host']['ports']['port']['state']["@state"]
             return_dict["Reason"] = u['nmaprun']['host']['ports']['port']['state']["@reason"]
             device1.scan = return_dict
@@ -1434,8 +1458,7 @@ def scan(id):
         nm.run_background()
 
         while nm.is_running():
-            print("Nmap Scan running: ETC: {0} DONE: {1}%".format(nm.etc,
-                                                                  nm.progress))
+            logger.info("Nmap Scan running: ETC: %s DONE: %s%%", nm.etc, nm.progress)
             sleep(2)
 
         u = xmltodict.parse(nm.stdout)
@@ -1447,14 +1470,14 @@ def scan(id):
             device1.exploited_scanned = True
             device1.save()
             return return_dict
-        except:
-            pass
+        except Exception as e:
+            logger.warning("Nmap plain scan failed to parse output: %s", e)
 
 
 @shared_task(bind=False)
 def exploit(id):
     device1 = Device.objects.get(id=id)
-    print(device1.type)
+    logger.info("exploit() for device type: %s", device1.type)
     if device1.type == "bosch_security":
         usernames = exploits.bosch_usernames(device1)
         return usernames
@@ -1548,16 +1571,16 @@ def whoisxml(id):
                 name = req_json['WhoisRecord']['subRecords'][0]['registrant']['name']
                 if "street1" in req_json['WhoisRecord']['subRecords'][0]['registrant']:
                     street = req_json['WhoisRecord']['subRecords'][0]['registrant']['street1']
-        except:
-            pass
+        except Exception as e:
+            logger.info("whoisxml: no subRecords registrant name/street: %s", e)
 
         try:
             if req_json['WhoisRecord']['subRecords'][0]['customField1Name'] == "netRange":
                 netrange = req_json['WhoisRecord']['subRecords'][0]['customField1Value']
             if req_json['WhoisRecord']['subRecords'][0]['customField2Name'] == "netRange":
                 netrange = req_json['WhoisRecord']['subRecords'][0]['customField2Value']
-        except:
-            pass
+        except Exception as e:
+            logger.info("whoisxml: no subRecords netRange: %s", e)
 
         try:
             org = req_json['WhoisRecord']['subRecords'][0]['registrant']['organization']
@@ -1566,8 +1589,8 @@ def whoisxml(id):
 
             if 'email' in req_json['WhoisRecord']['subRecords'][0]['registrant']:
                 email = req_json['WhoisRecord']['subRecords'][0]['registrant']['email']
-        except:
-            pass
+        except Exception as e:
+            logger.info("whoisxml: no subRecords org/city/email: %s", e)
 
         wh = Whois(device=device1, org=org,
                    street=street,

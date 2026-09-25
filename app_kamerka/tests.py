@@ -7,6 +7,7 @@ from django.urls import reverse
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import score_device, HONEYPOT_THRESHOLD
 from app_kamerka.models import Device, Search
+from app_kamerka.sightings import other_sightings
 from app_kamerka.views import is_ajax
 from kamerka import tasks
 
@@ -533,3 +534,220 @@ class SaveDeviceFromResultHoneypotTests(TestCase):
         device = Device.objects.get(ip='5.6.7.8')
         self.assertGreaterEqual(device.honeypot_score, HONEYPOT_THRESHOLD)
         self.assertIn('Conpot', device.honeypot_reasons)
+
+
+class SuspectedFalsePositiveTests(TestCase):
+    """_save_device_from_result must flag suspected_false_positive when a
+    generic/HTTP-error banner (banner_utils.looks_like_generic_http_response)
+    is classified under an ICS/healthcare/infra family with no sign of that
+    family in the banner -- a persistent, non-destructive flag, not a data
+    deletion."""
+
+    def setUp(self):
+        self.search = Search.objects.create(
+            country='US', ics='mitsubishi', coordinates='', coordinates_search='',
+        )
+
+    def _result(self, **overrides):
+        result = {
+            'ip_str': '9.9.9.9',
+            'product': '',
+            'org': 'Some Hosting Co',
+            'data': (
+                "HTTP/1.1 400 Bad Request\r\nServer: nginx\r\n\r\n"
+                "<html><head><title>400 Bad Request</title></head>"
+                "<body><center><h1>400 Bad Request</h1></center></body></html>"
+            ),
+            'port': 80,
+            'location': {'latitude': 1.0, 'longitude': 2.0, 'city': 'X', 'country_code': 'US'},
+        }
+        result.update(overrides)
+        return result
+
+    def test_generic_http_error_on_ics_family_is_flagged(self):
+        # A generic nginx 400 error page classified as "mitsubishi" -- the
+        # motivating example from the task: no "mitsubishi" token anywhere
+        # in the banner.
+        tasks._save_device_from_result(self.search, self._result(), 'mitsubishi', 'ics', 'mitsubishi query')
+
+        device = Device.objects.get(ip='9.9.9.9')
+        self.assertTrue(device.suspected_false_positive)
+
+    def test_normal_ics_banner_is_not_flagged(self):
+        result = self._result(
+            ip_str='9.9.9.8',
+            data='Modbus TCP\r\nUnit ID: 1\r\nDevice: Schneider Electric PLC\r\n',
+        )
+        tasks._save_device_from_result(self.search, result, 'modbus', 'ics', 'modbus query')
+
+        device = Device.objects.get(ip='9.9.9.8')
+        self.assertFalse(device.suspected_false_positive)
+
+    def test_family_token_present_in_banner_is_not_flagged(self):
+        # Conservative: if the generic-looking banner still mentions the
+        # family name itself, don't flag it (favor false negatives).
+        result = self._result(
+            ip_str='9.9.9.7',
+            data=(
+                "HTTP/1.1 400 Bad Request\r\nServer: mitsubishi-httpd\r\n\r\n"
+                "<html><body>400 Bad Request</body></html>"
+            ),
+        )
+        tasks._save_device_from_result(self.search, result, 'mitsubishi', 'ics', 'mitsubishi query')
+
+        device = Device.objects.get(ip='9.9.9.7')
+        self.assertFalse(device.suspected_false_positive)
+
+    def test_non_suspect_category_is_not_flagged(self):
+        # "coordinates" is not one of the suspect categories, even with a
+        # generic error banner.
+        result = self._result(ip_str='9.9.9.6')
+        tasks._save_device_from_result(self.search, result, 'webcam', 'coordinates', 'webcam query')
+
+        device = Device.objects.get(ip='9.9.9.6')
+        self.assertFalse(device.suspected_false_positive)
+
+    def test_devices_view_false_positive_filter_hides_flagged_rows(self):
+        user = User.objects.create_user(username='fp_tester', password='pw12345')
+        self.client.force_login(user)
+
+        tasks._save_device_from_result(self.search, self._result(), 'mitsubishi', 'ics', 'mitsubishi query')
+        normal_result = self._result(
+            ip_str='9.9.9.5', data='Modbus TCP\r\nDevice: Schneider Electric PLC\r\n',
+        )
+        tasks._save_device_from_result(self.search, normal_result, 'modbus', 'ics', 'modbus query')
+
+        flagged = Device.objects.get(ip='9.9.9.9')
+        normal = Device.objects.get(ip='9.9.9.5')
+        self.assertTrue(flagged.suspected_false_positive)
+        self.assertFalse(normal.suspected_false_positive)
+
+        response = self.client.get(reverse('devices'), {'false_positive': '0'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['devices']), [normal])
+
+        response = self.client.get(reverse('devices'), {'hide_fp': '1'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['devices']), [normal])
+
+        response = self.client.get(reverse('devices'))
+        self.assertEqual(set(response.context['devices']), {flagged, normal})
+
+
+class SetDeviceStatusTests(TestCase):
+    """set_device_status: AJAX-gated endpoint to update Device.status,
+    mirroring the whois/get_binaryedge_score pattern."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='status_tester', password='pw12345')
+        self.client.force_login(self.user)
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
+
+    def test_valid_status_saves_and_returns_json(self):
+        response = self.client.get(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'status': 'confirmed'})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'confirmed')
+
+    def test_default_status_is_new(self):
+        self.assertEqual(self.device.status, 'new')
+
+    def test_invalid_status_is_rejected(self):
+        response = self.client.get(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'bogus'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 400)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'new')
+
+    def test_missing_status_is_rejected(self):
+        response = self.client.get(reverse('set_device_status', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_ajax_is_400(self):
+        response = self.client.get(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'new')
+
+    def test_post_also_works(self):
+        response = self.client.post(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'reviewed'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'reviewed')
+
+    def test_devices_view_status_filter(self):
+        search = self.device.search
+        reviewed = Device.objects.create(
+            search=search, ip='1.2.3.5', type='modbus', category='ics', status='reviewed',
+        )
+        response = self.client.get(reverse('devices'), {'status': 'reviewed'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['devices']), [reviewed])
+
+
+class OtherSightingsTests(TestCase):
+    """other_sightings(device) surfaces other Device rows with the same ip,
+    across all searches, excluding the device itself, most-recent first."""
+
+    def setUp(self):
+        self.search1 = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.search2 = Search.objects.create(country='DE', ics='bacnet', coordinates='', coordinates_search='')
+
+    def test_returns_same_ip_devices_excluding_self(self):
+        first = Device.objects.create(search=self.search1, ip='1.2.3.4', type='modbus', category='ics')
+        second = Device.objects.create(search=self.search2, ip='1.2.3.4', type='bacnet', category='ics')
+        other_ip = Device.objects.create(search=self.search2, ip='5.6.7.8', type='bacnet', category='ics')
+
+        result = list(other_sightings(first))
+        self.assertEqual(result, [second])
+        self.assertNotIn(first, result)
+        self.assertNotIn(other_ip, result)
+
+    def test_no_other_sightings_returns_empty(self):
+        only = Device.objects.create(search=self.search1, ip='9.9.9.9', type='modbus', category='ics')
+        self.assertEqual(list(other_sightings(only)), [])
+
+    def test_most_recent_first(self):
+        first = Device.objects.create(search=self.search1, ip='1.2.3.4', type='modbus', category='ics')
+        second = Device.objects.create(search=self.search2, ip='1.2.3.4', type='bacnet', category='ics')
+        third = Device.objects.create(search=self.search2, ip='1.2.3.4', type='bacnet', category='ics')
+
+        result = list(other_sightings(first))
+        self.assertEqual(result, [third, second])
+
+    def test_falsy_device_returns_empty(self):
+        self.assertEqual(list(other_sightings(None)), [])
+
+    def test_device_view_passes_other_sightings_into_context(self):
+        user = User.objects.create_user(username='sightings_tester', password='pw12345')
+        self.client.force_login(user)
+        first = Device.objects.create(search=self.search1, ip='1.2.3.4', type='modbus', category='ics')
+        second = Device.objects.create(search=self.search2, ip='1.2.3.4', type='bacnet', category='ics')
+
+        response = self.client.get(reverse('device', args=[first.search_id, first.id, first.ip]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['other_sightings']), [second])
+        self.assertEqual(response.context['sightings_count'], 1)
+
+
+class CelerySettingsTests(TestCase):
+    """Celery 5 (kamerka/celery.py's config_from_object(..., namespace='CELERY'))
+    requires these settings to be CELERY_-prefixed."""
+
+    def test_broker_url_is_set(self):
+        from django.conf import settings
+        self.assertTrue(settings.CELERY_BROKER_URL)
+        self.assertIn('redis://', settings.CELERY_BROKER_URL)
+
+    def test_broker_connection_retry_on_startup_is_true(self):
+        from django.conf import settings
+        self.assertIs(settings.CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP, True)

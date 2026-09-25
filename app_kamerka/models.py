@@ -12,6 +12,16 @@ class Search(models.Model):
     nmap = models.BooleanField(default=False)
 
 class Device(models.Model):
+    # Triage status: manually set by an operator via the set_device_status
+    # AJAX endpoint (app_kamerka.views.set_device_status). Defaults to "new"
+    # for every freshly-saved device.
+    STATUS_CHOICES = [
+        ('new', 'New'),
+        ('reviewed', 'Reviewed'),
+        ('confirmed', 'Confirmed'),
+        ('false_positive', 'False positive'),
+    ]
+
     search = models.ForeignKey(Search, on_delete=models.CASCADE)
     ip = models.CharField(max_length=100, default="")
     product = models.CharField(max_length=500, default="")
@@ -41,6 +51,14 @@ class Device(models.Model):
     # On-demand Shodan HoneyScore (0.0-1.0), null until a user explicitly
     # requests it via the "Check HoneyScore" button (get_honeyscore view).
     honeyscore = models.FloatField(null=True, blank=True, default=None)
+    # Persistent, non-destructive "this match is probably a generic web
+    # server / HTTP-error page misclassified as a device family" flag,
+    # computed at save time in kamerka.tasks._save_device_from_result. Never
+    # deletes/hides data by itself -- see the `devices` view's
+    # false_positive/hide_fp filter for that.
+    suspected_false_positive = models.BooleanField(default=False)
+    # Manual operator triage status (see STATUS_CHOICES above).
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='new')
 
 class DeviceNearby(models.Model):
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
