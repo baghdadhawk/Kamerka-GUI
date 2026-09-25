@@ -23,6 +23,79 @@ function kamChartPalette(){
     ];
 }
 
+/* Map/grid colors (dashboard jvectormap + Morris grid line), also derived
+   from kamerka-modern.css :root tokens so they track the active theme.
+   Kept separate from kamChartPalette() since the map has its own token
+   names (--km-map-*) and its own re-render path -- see
+   kamRenderDashboardMap()/kamRedrawDashboardMap() below. */
+function kamMapColors(){
+    var css = (document.documentElement && window.getComputedStyle) ?
+        window.getComputedStyle(document.documentElement) : null;
+    function v(name, fallback){
+        var val = css ? css.getPropertyValue(name) : '';
+        val = val ? val.trim() : '';
+        return val || fallback;
+    }
+    return {
+        background: v('--km-map-bg', '#0a141d'),
+        region: v('--km-map-region', '#33414e'),
+        selected: v('--km-map-selected', '#ff2fd1'),
+        scaleFrom: v('--km-map-scale-from', '#1a212c'),
+        scaleTo: v('--km-map-scale-to', '#00e1ff'),
+        marker: v('--km-map-marker', '#22c58b'),
+        gridLine: v('--km-morris-grid', '#00b8d1')
+    };
+}
+
+/* Renders (or re-renders) the dashboard world map with the current theme's
+   colors. Safe to call more than once on the same page: jvectormap has no
+   CSS hook of its own (colors are baked in at construction), so a theme
+   toggle has to tear the previous map down (jvm's own .remove(), which
+   detaches its internal container) and build a fresh one rather than
+   restyle in place. window.kamDashboardCountries holds the last data set
+   passed in so a later re-theme (see _nav.html's toggle handler) can
+   re-render without needing the page to re-fetch anything. */
+function kamRenderDashboardMap(countries){
+    if ($('#dashboard-map-seles').length === 0) { return; }
+    if (window.kamDashboardMap && typeof window.kamDashboardMap.remove === 'function') {
+        try { window.kamDashboardMap.remove(); } catch (e) {}
+        window.kamDashboardMap = null;
+    }
+    var colors = kamMapColors();
+    window.kamDashboardMap = new jvm.WorldMap({container: $('#dashboard-map-seles'),
+                                    map: 'world_mill_en',
+                                    backgroundColor: colors.background,
+                                    regionsSelectable: true,
+                                    regionStyle: {selected: {fill: colors.selected},
+                                                    initial: {fill: colors.region}},
+                                    markerStyle: {initial: {fill: colors.marker,
+                                                   stroke: colors.marker}},
+                                    onRegionClick: function(e, code){
+                                        if (code) {
+                                            window.location.href = '/devices?country=' + encodeURIComponent(String(code).toUpperCase());
+                                        }
+                                    },
+                                    series: {
+                                        regions: [
+                                            {
+                                            scale: [colors.scaleFrom, colors.scaleTo],
+                                            attribute: 'fill',
+                                            normalizeFunction: 'polynomial',
+                                            values: countries}]
+        },
+                                });
+}
+
+/* Called by _nav.html's theme toggle so the map recolors immediately
+   instead of waiting for a full page reload. Only the map is re-rendered
+   here (not the Morris bar/donut, which would duplicate SVGs if re-created
+   on top of themselves) -- see the STAGE 3 map-theming notes. */
+window.kamRedrawDashboardMap = function(){
+    if (window.kamDashboardCountries !== undefined) {
+        kamRenderDashboardMap(window.kamDashboardCountries);
+    }
+};
+
 function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, countries){
 //console.log(ports)
     /* reportrange */
@@ -63,6 +136,7 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
        see kamChartPalette() above, plus an HTML legend since Morris has no
        built-in one. */
     var kamPalette = kamChartPalette();
+    var kamColors = kamMapColors();
     if ($('#dashboard-donut-1').length > 0) {
         var donutData = [
             {label: "ICS", value: ics_len},
@@ -109,7 +183,7 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
             xLabelAngle: 60,
             hideHover: true,
             resize: true,
-            gridLineColor: '#0064d7'
+            gridLineColor: kamColors.gridLine
         });
         dashboardBar.on('click', function(i, row){
             if (row && row.port) {
@@ -165,43 +239,11 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
 //      gridLineColor: '#E5E5E5'
 //    });
 //    /* End Moris Area Chart */
-    /* Vector Map */
-    var mapData = countries;
-        var colorScale = ['#f0f0f0', '#C8EEFF', '#0071A4', '#FFA500', '#ff0000'];
-
-    if ($('#dashboard-map-seles').length > 0) {
-    var jvm_wm = new jvm.WorldMap({container: $('#dashboard-map-seles'),
-                                    map: 'world_mill_en',
-                                    backgroundColor: '#0a141d',
-                                    regionsSelectable: true,
-                                    regionStyle: {selected: {fill: '#ff00cd'},
-                                                    initial: {fill: '#33414E'}},
-                                    markerStyle: {initial: {fill: '#1caf9a',
-                                                   stroke: '#1caf9a'}},
-                                    onRegionClick: function(e, code){
-                                        if (code) {
-                                            window.location.href = '/devices?country=' + encodeURIComponent(String(code).toUpperCase());
-                                        }
-                                    },
-//                                    markers: [{latLng: [50.27, 30.31], name: pies},
-//                                              {latLng: [52.52, 13.40], name: 'Berlin - 2'},
-//                                              {latLng: [48.85, 2.35], name: 'Paris - 1'},
-//                                              {latLng: [51.51, -0.13], name: 'London - 3'},
-//                                              {latLng: [40.71, -74.00], name: 'New York - 5'},
-//                                              {latLng: [35.38, 139.69], name: 'Tokyo - 12'},
-//                                              {latLng: [37.78, -122.41], name: 'San Francisco - 8'},
-//                                              {latLng: [28.61, 77.20], name: 'New Delhi - 4'},
-//                                              {latLng: [39.91, 116.39], name: 'Beijing - 3'}],
-                                    series: {
-                                        regions: [
-                                            {
-                                            scale: ["#ff00cd"],
-                                            attribute: 'fill',
-                                            normalizeFunction: 'polynomial',
-                                            values: mapData}]
-        },
-                                });
-    }
+    /* Vector Map -- colors + rendering live in kamRenderDashboardMap()
+       above so the same code path handles both the initial paint and a
+       theme-toggle re-render (window.kamRedrawDashboardMap). */
+    window.kamDashboardCountries = countries;
+    kamRenderDashboardMap(countries);
     /* END Vector Map */
 
     

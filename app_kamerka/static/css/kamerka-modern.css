@@ -76,6 +76,19 @@
   --km-chart-5: var(--km-accent-dim);
   --km-chart-6: #4fe0b3;
 
+  /* jvectormap (dashboard world map) + Morris grid line -- read from JS via
+     getComputedStyle so they track the active theme; see index_charts.js
+     kamMapColors(). jvectormap itself has no CSS hook (it paints to
+     <canvas>/SVG at construction time), so the map is re-rendered on theme
+     toggle -- see _nav.html and kamRedrawDashboardMap() below. */
+  --km-map-bg: #0a141d;
+  --km-map-region: #33414e;
+  --km-map-selected: var(--km-accent-2);
+  --km-map-scale-from: #1a212c;
+  --km-map-scale-to: var(--km-accent);
+  --km-map-marker: var(--km-success);
+  --km-morris-grid: var(--km-accent-dim);
+
   --km-radius-sm: 6px;
   --km-radius: 10px;
   --km-radius-lg: 14px;
@@ -145,6 +158,14 @@
   --km-chart-4: #4a5fd6;
   --km-chart-5: var(--km-accent-dim);
   --km-chart-6: #0f9d78;
+
+  --km-map-bg: #e4e9f0;
+  --km-map-region: #c3ccd9;
+  --km-map-selected: var(--km-accent-2);
+  --km-map-scale-from: #d6dce4;
+  --km-map-scale-to: var(--km-accent);
+  --km-map-marker: var(--km-success);
+  --km-morris-grid: var(--km-accent-dim);
 
   --km-shadow-sm: 0 1px 2px rgba(20, 30, 45, 0.08);
   --km-shadow: 0 4px 16px rgba(20, 30, 45, 0.12);

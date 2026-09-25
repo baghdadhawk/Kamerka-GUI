@@ -145,7 +145,7 @@
                             <div class="panel panel-default tabs">
                                 <ul class="nav nav-tabs nav-justified">
                                        {% if device.located %}
-                                                                    <li><a href="#tab8" data-toggle="tab" style="background:#ff00cd">Locate</a></li>
+                                                                    <li><a href="#tab8" data-toggle="tab" style="background:var(--km-accent-2)">Locate</a></li>
                                     {% else %}
                                     <li><a href="#tab8" data-toggle="tab">Locate</a></li>
                                         {% endif %}
@@ -156,7 +156,7 @@
                                     <div class="tab-pane" id="tab8">
                                         <div class="panel panel-default">
                                             {% if device.located %}
-                                <div class="panel-heading" style="background:#ff00cd">
+                                <div class="panel-heading" style="background:var(--km-accent-2)">
                                     {% else %}
                                     <div class="panel-heading">
                                         {% endif %}
@@ -533,9 +533,21 @@
                             <!-- START DATATABLE EXPORT -->
 
 
-<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&libraries=places"></script>
+<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&libraries=places"
+    onerror="window.kamMapLoadFailed = true;"></script>
+<script src="{% static 'js/kamerka_gmaps_theme.js' %}"></script>
 
 <script>
+/* map/marker/directions state is declared at top level (rather than
+   inside kamInitDeviceMap() below) since AddMarker()/GetRoute() -- called
+   from inline onclick handlers elsewhere on this page -- close over these
+   same variables. */
+var map, marker, bounds;
+var source, destination;
+var directionsDisplay;
+var directionsService;
+var init_marker;
+
 function AddMarker() {
 {% for dev in nearby %}
        var init_marker = new google.maps.LatLng({{ dev.lat }},{{ dev.lon }});
@@ -547,12 +559,11 @@ function AddMarker() {
   {% endfor %}
     };
 
-
-
-
-    var source, destination;
-    var directionsDisplay;
-    var directionsService = new google.maps.DirectionsService();
+function kamInitDeviceMap() {
+    // Needs the Maps JS API (`google.maps`) to already be loaded, so it is
+    // only called once that's confirmed -- see the kamMapLoadFailed guard
+    // below.
+    directionsService = new google.maps.DirectionsService();
     google.maps.event.addDomListener(window, 'load', function () {
 var options = { componentRestrictions: { country: '{{ device.country_code}}' } };
 
@@ -565,102 +576,24 @@ var options = { componentRestrictions: { country: '{{ device.country_code}}' } }
 
 
 
-    var init_marker = new google.maps.LatLng({{ device.lat }},{{ device.lon }});
+    init_marker = new google.maps.LatLng({{ device.lat }},{{ device.lon }});
     var mapOptions = {
         zoom: 13,
         center: init_marker,
         durationInTraffic: true,
-        styles: [
-        { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
-        { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] },
-        { elementType: "labels.text.fill", stylers: [{ color: "#746855" }] },
-        {
-          featureType: "administrative.locality",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#d59563" }],
-        },
-        {
-          featureType: "poi",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#d59563" }],
-        },
-        {
-          featureType: "poi.park",
-          elementType: "geometry",
-          stylers: [{ color: "#263c3f" }],
-        },
-        {
-          featureType: "poi.park",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#6b9a76" }],
-        },
-        {
-          featureType: "road",
-          elementType: "geometry",
-          stylers: [{ color: "#38414e" }],
-        },
-        {
-          featureType: "road",
-          elementType: "geometry.stroke",
-          stylers: [{ color: "#212a37" }],
-        },
-        {
-          featureType: "road",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#9ca5b3" }],
-        },
-        {
-          featureType: "road.highway",
-          elementType: "geometry",
-          stylers: [{ color: "#746855" }],
-        },
-        {
-          featureType: "road.highway",
-          elementType: "geometry.stroke",
-          stylers: [{ color: "#1f2835" }],
-        },
-        {
-          featureType: "road.highway",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#f3d19c" }],
-        },
-        {
-          featureType: "transit",
-          elementType: "geometry",
-          stylers: [{ color: "#2f3948" }],
-        },
-        {
-          featureType: "transit.station",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#d59563" }],
-        },
-        {
-          featureType: "water",
-          elementType: "geometry",
-          stylers: [{ color: "#17263c" }],
-        },
-        {
-          featureType: "water",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#515c6d" }],
-        },
-        {
-          featureType: "water",
-          elementType: "labels.text.stroke",
-          stylers: [{ color: "#17263c" }],
-        },
-      ],
+        styles: (window.kamGoogleMapStyles ? window.kamGoogleMapStyles() : []),
     };
     map = new google.maps.Map(document.getElementById('google_world_map'), mapOptions);
+    if (window.kamRegisterGoogleMap) { window.kamRegisterGoogleMap(map); }
 
-var marker = new google.maps.Marker({
+marker = new google.maps.Marker({
     map: map,
     title: 'Coordinates',
     position: init_marker,
   });
 
-   var bounds = new google.maps.LatLngBounds();
-
+   bounds = new google.maps.LatLngBounds();
+}
 
     function GetRoute() {
     //*********DIRECTIONS AND ROUTE**********************//
@@ -679,6 +612,26 @@ var marker = new google.maps.Marker({
 
 
     }
+
+function kamShowMapLoadError(){
+    var el = document.getElementById('google_world_map');
+    if (el) {
+        el.innerHTML = '<div class="km-empty-state" style="height:100%;">Map unavailable &mdash; the Google Maps API key is missing or invalid.</div>';
+    }
+}
+// Guard: if the Maps JS API failed to load (missing/invalid key, network
+// error), `google` never gets defined -- don't let that throw and break
+// the rest of the page, show a friendly placeholder instead. (No jQuery
+// dependency here -- jQuery itself is not loaded until further down this
+// page, so this can't wait on $(document).ready the way map.html/
+// results.html do; the maps <script> above is render-blocking, not
+// async/defer, so `google` is already settled one way or the other by the
+// time this line runs.)
+if (window.kamMapLoadFailed || typeof google === 'undefined' || !google.maps) {
+    kamShowMapLoadError();
+} else {
+    kamInitDeviceMap();
+}
 </script>
 
 
