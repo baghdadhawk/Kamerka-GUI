@@ -31,17 +31,6 @@
                         <a href="/">ꓘamerka</a>
                         <a href="#" class="x-navigation-control"></a>
                     </li>
-                    <li class="xn-profile">
-
-                        <div class="profile">
-                            <div class="profile-image">
-                            </div>
-                            <div class="profile-data">
-                                  <img width=200px height=200px src="https://www.offensiveosint.io/content/images/2020/07/OffensiveOsint-logo-RGB-2.png">
-                            </div>
-
-                        </div>
-                    </li>
                     <li class="xn-title">Navigation</li>
                     <li class="">
                         <a href="index"><span class="fa fa-desktop"></span> <span class="xn-text">Dashboard</span></a>
@@ -98,22 +87,20 @@
                     <div class="row">
                         <div class="col-md-3">
                             
-                            <!-- START WIDGET SLIDER -->
-                            <div class="widget widget-default widget-carousel">
-                                <div class="owl-carousel" id="owl-example">
-                                    <div>
-                                        <div class="widget-title">Shodan credits</div>
-                                        <div class="widget-int">{% if shodan_credits != None %}{{ shodan_credits }}{% else %}<span class="km-na">n/a</span>{% endif %}</div>
+                            <!-- START CREDITS -->
+                            <div class="widget widget-default">
+                                <div class="km-credit-stats">
+                                    <div class="km-credit-stat">
+                                        <div class="widget-title"><svg class="km-icon" aria-hidden="true"><use href="#icon-credit-card"></use></svg> Shodan</div>
+                                        <div class="widget-int">{% if shodan_credits != None %}{{ shodan_credits }}{% else %}<span class="km-na">unavailable</span>{% endif %}</div>
                                     </div>
-                                    <div>
-                                        <div class="widget-title">BinaryEdge credits</div>
-                                        <div class="widget-int">{% if binaryedge_credits != None %}{{ binaryedge_credits }}{% else %}<span class="km-na">n/a</span>{% endif %}</div>
+                                    <div class="km-credit-stat">
+                                        <div class="widget-title"><svg class="km-icon" aria-hidden="true"><use href="#icon-credit-card"></use></svg> BinaryEdge</div>
+                                        <div class="widget-int">{% if binaryedge_credits != None %}{{ binaryedge_credits }}{% else %}<span class="km-na">unavailable</span>{% endif %}</div>
                                     </div>
-                                </div>
-                                <div class="widget-controls">
                                 </div>
                             </div>
-                            <!-- END WIDGET SLIDER -->
+                            <!-- END CREDITS -->
 
                         </div>
                         <div class="col-md-3">
@@ -121,7 +108,7 @@
                             <!-- START WIDGET MESSAGES -->
                             <div class="widget widget-default widget-item-icon">
                                 <div class="widget-item-left">
-                                    <span class="glyphicon glyphicon-eye-open"></span>
+                                    <svg class="km-icon" aria-hidden="true"><use href="#icon-eye"></use></svg>
                                 </div>
                                 <div class="widget-data">
                                     <div class="widget-int num-count">{{ device.count }}</div>
@@ -137,7 +124,7 @@
 
                             <div class="widget widget-default widget-item-icon">
                                 <div class="widget-item-left">
-                                    <span class="fa fa-search"></span>
+                                    <svg class="km-icon" aria-hidden="true"><use href="#icon-search"></use></svg>
                                 </div>
                                 <div class="widget-data">
                                     <div class="widget-int num-count">{{ search_len.count }}</div>
@@ -153,6 +140,7 @@
                             <!-- START WIDGET CLOCK -->
                             <div class="widget widget-info widget-padding-sm">
                                 <br>
+                                <svg class="km-icon" aria-hidden="true" style="opacity:0.7;"><use href="#icon-clock"></use></svg>
                                 <div class="widget-big-int plugin-clock">00:00</div>
                                 <div class="widget-subtitle plugin-date">Loading...</div>
                                 <div class="widget-controls">

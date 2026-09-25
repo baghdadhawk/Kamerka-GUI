@@ -433,6 +433,107 @@ class PageSmokeTests(TestCase):
         response = self.client.get(reverse('sources'))
         self.assertEqual(response.status_code, 200)
 
+    def test_search_main(self):
+        response = self.client.get(reverse('search_main'))
+        self.assertEqual(response.status_code, 200)
+
+
+class HookPreservationTests(TestCase):
+    """Stage 1 UI re-skin guard: every id/class that plugins.js, actions.js,
+    index_charts.js, draw_charts_results.js, search.js, celery-progress or
+    the DataTables/Selectr/Morris/jvectormap/Google-Maps wiring reaches into
+    by exact selector must still be present in the rendered HTML. This is
+    deliberately dumb string containment (assertContains), not a DOM/JS
+    test -- its only job is to fail loudly if a later visual pass silently
+    renames or drops a hook these scripts depend on."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='hooktester', password='pw12345')
+        self.client.force_login(self.user)
+
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(
+            search=self.search, ip='10.0.0.2', type='modbus', category='ics',
+            port='502', country_code='US', lat='1.0', lon='2.0',
+        )
+
+    def test_index_hooks(self):
+        response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        for hook in ('dashboard-bar-1', 'dashboard-donut-1', 'dashboard-donut-1-legend',
+                     'dashboard-map-seles'):
+            self.assertContains(response, hook)
+
+    def test_index_hooks_with_task_in_progress(self):
+        # progress-bar/-message/task-progress-wrapper only render when the
+        # session has an in-flight celery task_id (index.html's {% if task_id %}).
+        session = self.client.session
+        session['task_id'] = 'fake-task-id'
+        session.save()
+        response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        for hook in ('task-progress-wrapper', 'id=\'progress-bar\'', 'progress-bar-message'):
+            self.assertContains(response, hook)
+
+    def test_index_hooks_with_vulns(self):
+        Device.objects.create(
+            search=self.search, ip='10.0.0.3', type='modbus', category='ics',
+            port='502', country_code='US', lat='1.0', lon='2.0',
+            vulns="['CVE-2020-0001']",
+        )
+        response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'wordcloud')
+
+    def test_devices_hooks(self):
+        response = self.client.get(reverse('devices'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'customers2')
+        self.assertContains(response, 'class="table datatable"')
+
+    def test_results_hooks(self):
+        response = self.client.get(reverse('results', args=[self.search.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'customers2')
+        self.assertContains(response, 'class="table datatable"')
+
+    def test_device_page_hooks(self):
+        response = self.client.get(
+            reverse('device', args=[self.device.search_id, self.device.id, self.device.ip])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'km-status-btn')
+        self.assertContains(response, 'data-status="')
+        self.assertContains(response, 'km-notes-box')
+        self.assertContains(response, 'km-badge')
+        self.assertContains(response, 'csrfmiddlewaretoken')
+
+    def test_search_main_hooks(self):
+        response = self.client.get(reverse('search_main'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'estimate_result')
+        self.assertContains(response, 'estimate_btn')
+        self.assertContains(response, 'csrfmiddlewaretoken')
+
+    def test_map_hooks(self):
+        response = self.client.get(reverse('map'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'google_world_map')
+
+    def test_gallery_hooks(self):
+        response = self.client.get(reverse('gallery'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'gallery')
+
+    def test_history_hooks(self):
+        response = self.client.get(reverse('history'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'customers2')
+
+    def test_sources_loads(self):
+        response = self.client.get(reverse('sources'))
+        self.assertEqual(response.status_code, 200)
+
 
 class ScoreDeviceTests(TestCase):
     """app_kamerka.honeypot.score_device is a pure function; test it
@@ -941,7 +1042,7 @@ class IndexDashboardCreditsTests(TestCase):
     check_credits() only returns 0 or 1 entries (either API call can fail
     independently). `index` now resolves each into an explicit
     shodan_credits/binaryedge_credits context value (None when missing, the
-    template renders that as "n/a")."""
+    template renders that as "unavailable")."""
 
     def setUp(self):
         self.user = User.objects.create_user(username='dash_tester', password='pw12345')
@@ -962,7 +1063,7 @@ class IndexDashboardCreditsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context['shodan_credits'], 100)
         self.assertIsNone(response.context['binaryedge_credits'])
-        self.assertContains(response, 'n/a')
+        self.assertContains(response, 'unavailable')
 
     def test_no_credits_renders_na_for_both(self):
         with mock.patch('app_kamerka.views.check_credits', return_value=[]):
@@ -970,8 +1071,8 @@ class IndexDashboardCreditsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.context['shodan_credits'])
         self.assertIsNone(response.context['binaryedge_credits'])
-        # "n/a" should appear (at least) twice: once for each tile.
-        self.assertContains(response, 'n/a', count=2)
+        # "unavailable" should appear (at least) twice: once for each tile.
+        self.assertContains(response, 'unavailable', count=2)
 
     def test_progress_bar_hidden_without_active_task(self):
         response = self.client.get(reverse('index'))

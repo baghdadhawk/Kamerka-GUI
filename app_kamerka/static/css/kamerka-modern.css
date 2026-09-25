@@ -8,6 +8,42 @@
    integrations. No selector that those scripts rely on is renamed here.
    ========================================================================== */
 
+/* ==========================================================================
+   Self-hosted Inter (static/fonts/inter/*.woff2, no CDN) — Latin subset,
+   weights 400/500/600/700, covering the UI copy this app renders. Falls
+   back to the system stack below (kept for FontAwesome/glyphicon-era
+   markup + anything not yet migrated, and as the immediate paint while the
+   webfont loads).
+   ========================================================================== */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/inter/inter-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../fonts/inter/inter-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../fonts/inter/inter-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../fonts/inter/inter-700.woff2") format("woff2");
+}
+
 :root {
   /* -- Design tokens ------------------------------------------------- */
   --km-bg: #0a0d12;
@@ -55,8 +91,8 @@
   --km-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
   --km-shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
 
-  --km-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-    Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --km-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --km-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono",
     Menlo, monospace;
 
@@ -169,6 +205,29 @@
 .km-theme-toggle:hover {
   border-color: var(--km-accent);
   color: var(--km-accent);
+}
+
+/* ==========================================================================
+   Icon sprite (_icons.svg, included once via _nav.html) — replaces the
+   glyphicon/fa "tofu"/box-artifact glyphs on the dashboard stat tiles and
+   the nav/theme-toggle with clean inline SVG. currentColor means every
+   icon tracks the surrounding text color, so it repaints for free on
+   theme change; no JS involved.
+   ========================================================================== */
+.km-icon {
+  width: 1em;
+  height: 1em;
+  display: inline-block;
+  vertical-align: -0.125em;
+  fill: none;
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+
+.km-theme-toggle .km-icon {
+  width: 16px;
+  height: 16px;
+  vertical-align: middle;
 }
 
 * { box-sizing: border-box; }
@@ -324,23 +383,41 @@ a:hover { color: var(--km-accent-2); }
   background: transparent;
 }
 
+/* Shared page "band": every direct child of .page-content (the page title
+   bar, the breadcrumb/progress strip, and the main content wrapper) lines
+   up on the same left/right gutter. Root cause of the historic left-edge
+   clipping (e.g. index.html's dashboard <h1>, "ndustrial..."): that title
+   lives inside .x-navigation-horizontal.x-navigation-panel, a *sibling* of
+   .page-content-wrap, which used to be the only one of the three with any
+   horizontal padding -- so its content rendered flush to the viewport
+   edge. Logical properties (inline = left/right in LTR, flips under RTL)
+   keep this safe once the app gets an RTL pass. */
+.x-navigation.x-navigation-horizontal.x-navigation-panel,
+.breadcrumb,
 .page-content-wrap {
   max-width: 1400px;
-  margin: 0 auto;
-  padding: var(--km-space-5);
+  margin-inline: auto;
+  padding-inline: var(--km-space-5);
+  box-sizing: border-box;
+  list-style: none;
+}
+
+.page-content-wrap {
+  padding-block: var(--km-space-5);
 }
 
 .x-navigation.x-navigation-horizontal.x-navigation-panel {
   background: transparent;
   border: none;
-  margin: 0 0 var(--km-space-4) 0;
-  padding: 0;
+  margin-block: 0 var(--km-space-4);
+  padding-block: 0;
+  list-style: none;
 }
 
 .x-navigation.x-navigation-horizontal.x-navigation-panel h1,
 .x-navigation.x-navigation-horizontal.x-navigation-panel center h1 {
   color: var(--km-text) !important;
-  text-align: left !important;
+  text-align: start !important;
   font-size: 1.5rem;
   font-weight: 700;
   margin: var(--km-space-2) 0 0 0;
@@ -349,9 +426,8 @@ a:hover { color: var(--km-accent-2); }
 
 .breadcrumb {
   background: transparent;
-  padding: 0 0 var(--km-space-4) 0;
-  margin: 0 0 var(--km-space-2) 0;
-  list-style: none;
+  padding-block: 0 var(--km-space-4);
+  margin-block: 0 var(--km-space-2);
 }
 
 .page-title h2 {
@@ -510,6 +586,30 @@ a:hover { color: var(--km-accent-2); }
 }
 
 .widget-carousel { padding: var(--km-space-4); }
+
+/* Credits tile (index.html) — two static stat cells (Shodan / BinaryEdge)
+   replacing the owl-carousel wrapper that used to mis-initialize outside
+   its slider script and collapse to a lone "n/a". */
+.km-credit-stats {
+  display: flex;
+  gap: var(--km-space-4);
+  padding: var(--km-space-4);
+  height: 100%;
+}
+
+.km-credit-stat {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.km-credit-stat .widget-title { margin-bottom: 2px; }
+
+.km-credit-stat .widget-int {
+  font-size: 1.35rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ==========================================================================
    Tables / DataTables
@@ -676,6 +776,15 @@ button.btn-primary {
 .page-wrapper.bg-img-1 {
   background-color: var(--km-bg) !important;
   min-height: 100vh;
+}
+
+/* search_main.html uses its own shell (.page-wrapper/.wrapper--w900) rather
+   than .page-content-wrap -- give it the same inline gutter so its content
+   never touches the viewport edge on narrow screens either (main.css's
+   .wrapper--w900 only sets a max-width + auto margin, no padding). */
+.wrapper.wrapper--w900 {
+  padding-inline: var(--km-space-5);
+  box-sizing: border-box;
 }
 
 .wrapper.wrapper--w900 > h1 {
@@ -1153,3 +1262,20 @@ button.km-loading::after {
 .km-sightings-list li:last-child { border-bottom: none; }
 
 .km-sightings-list a { font-weight: 600; }
+
+/* ==========================================================================
+   Reduced motion — disables the km-spin AJAX-button loader animation and
+   any counter animation on the dashboard stat tiles (.num-count) for users
+   who have asked the OS/browser to minimise motion. km-spin is the only
+   animation this layer defines; .num-count has no animation of its own
+   today (plain static number) but is covered here too so a future counter
+   effect on that class inherits the same guard automatically.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .km-btn-loading::after,
+  button.km-loading::after,
+  .num-count {
+    animation: none !important;
+    transition: none !important;
+  }
+}

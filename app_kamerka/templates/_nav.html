@@ -1,4 +1,5 @@
 {% load static %}
+{% include '_icons.svg' %}
 <nav id="app-nav">
     <div class="app-navbar-inner">
         <a class="app-navbar-brand" href="{% url 'search_main' %}"><span class="dot"></span> ꓘamerka</a>
@@ -12,7 +13,7 @@
             <li><a href="{% url 'sources' %}">Sources</a></li>
             <li><a href="/admin/logout/">Log out</a></li>
             <li>
-                <button type="button" id="km-theme-toggle" class="km-theme-toggle" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">&#9788;</button>
+                <button type="button" id="km-theme-toggle" class="km-theme-toggle" title="Toggle light/dark theme" aria-label="Toggle light/dark theme"><svg class="km-icon" aria-hidden="true"><use href="#icon-sun"></use></svg></button>
             </li>
         </ul>
     </div>
@@ -46,12 +47,15 @@
     var btn = document.getElementById('km-theme-toggle');
 
     function applyTheme(theme) {
+        var use = btn ? btn.querySelector('use') : null;
         if (theme === 'light') {
             root.setAttribute('data-theme', 'light');
-            if (btn) { btn.innerHTML = '&#9789;'; btn.title = 'Switch to dark theme'; }
+            if (use) { use.setAttribute('href', '#icon-moon'); }
+            if (btn) { btn.title = 'Switch to dark theme'; }
         } else {
             root.removeAttribute('data-theme');
-            if (btn) { btn.innerHTML = '&#9788;'; btn.title = 'Switch to light theme'; }
+            if (use) { use.setAttribute('href', '#icon-sun'); }
+            if (btn) { btn.title = 'Switch to light theme'; }
         }
     }
 
