@@ -115,7 +115,7 @@
 <script async defer
     src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&libraries=places" type="text/javascript"
     onerror="window.kamMapLoadFailed = true;"></script>
-         <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+         <script src="{% static 'vendor/jquery/3.4.1/jquery.min.js' %}"></script>
 <script src="{% static 'js/markerclusterer.js' %}"></script>
 <script src="{% static 'js/kamerka_gmaps_theme.js' %}"></script>
 
