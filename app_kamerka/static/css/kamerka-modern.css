@@ -1264,6 +1264,137 @@ button.km-loading::after {
 .km-sightings-list a { font-weight: 600; }
 
 /* ==========================================================================
+   Dashboard density (Stage 2) — clickable KPI tiles, ranked lists (top
+   device types / top orgs), a compact recent-devices table, and a small
+   loading skeleton for the async credits tile.
+   ========================================================================== */
+
+.km-kpi-link {
+  display: block;
+  text-decoration: none !important;
+  color: inherit;
+}
+
+.widget.km-kpi-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.widget.km-kpi-clickable:hover {
+  border-color: var(--km-accent);
+  transform: translateY(-1px);
+}
+
+.km-skeleton {
+  display: inline-block;
+  width: 2.5em;
+  height: 1em;
+  border-radius: var(--km-radius-sm);
+  background: var(--km-surface-2);
+  position: relative;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.km-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--km-border);
+  border-top-color: var(--km-accent);
+  border-radius: 50%;
+  width: 0.9em;
+  height: 0.9em;
+  margin: auto;
+  animation: km-spin 0.6s linear infinite;
+}
+
+.km-rank-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--km-space-3) var(--km-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--km-space-2);
+}
+
+.km-rank-row {
+  display: block;
+  text-decoration: none !important;
+  color: var(--km-text-dim);
+}
+
+.km-rank-row-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--km-space-2);
+  font-size: 0.85rem;
+  margin-bottom: 3px;
+}
+
+.km-rank-label {
+  color: var(--km-text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.km-rank-count {
+  color: var(--km-text-muted);
+  flex-shrink: 0;
+}
+
+.km-rank-bar-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--km-surface-2);
+  overflow: hidden;
+}
+
+.km-rank-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--km-accent);
+}
+
+.km-rank-row:hover .km-rank-label { color: var(--km-accent); }
+.km-rank-row:hover .km-rank-bar-fill { background: var(--km-accent-2); }
+
+.km-table-compact {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.km-table-compact th {
+  text-align: left;
+  color: var(--km-text-muted);
+  font-weight: 600;
+  padding: var(--km-space-2) var(--km-space-3);
+  border-bottom: 1px solid var(--km-border);
+}
+
+.km-table-compact td {
+  padding: var(--km-space-2) var(--km-space-3);
+  border-bottom: 1px solid var(--km-border-soft);
+  color: var(--km-text-dim);
+}
+
+.km-table-compact tr:last-child td { border-bottom: none; }
+
+.km-table-compact tr:hover td { background: var(--km-surface-2); }
+
+.km-table-compact a { color: var(--km-text); font-weight: 600; }
+.km-table-compact a:hover { color: var(--km-accent); }
+
+.km-page-title {
+  color: var(--km-accent-2);
+  text-align: center;
+  font-weight: 700;
+}
+
+/* ==========================================================================
    Reduced motion — disables the km-spin AJAX-button loader animation and
    any counter animation on the dashboard stat tiles (.num-count) for users
    who have asked the OS/browser to minimise motion. km-spin is the only
@@ -1274,6 +1405,7 @@ button.km-loading::after {
 @media (prefers-reduced-motion: reduce) {
   .km-btn-loading::after,
   button.km-loading::after,
+  .km-skeleton::after,
   .num-count {
     animation: none !important;
     transition: none !important;

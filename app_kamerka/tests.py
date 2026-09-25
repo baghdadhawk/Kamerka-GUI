@@ -228,7 +228,7 @@ class DevicesViewFilterTests(TestCase):
         )
         self.webcam_us = Device.objects.create(
             search=self.search1, ip='10.0.0.3', type='webcam', category='coordinates',
-            port='80', country_code='US', vulns='',
+            port='80', country_code='US', vulns='', org='Acme Corp',
         )
 
     def test_no_filters_returns_all(self):
@@ -257,6 +257,11 @@ class DevicesViewFilterTests(TestCase):
     def test_filter_by_country_case_insensitive(self):
         response = self.client.get(reverse('devices'), {'country': 'us'})
         self.assertEqual(set(response.context['devices']), {self.modbus_us, self.webcam_us})
+
+    def test_filter_by_org_icontains(self):
+        response = self.client.get(reverse('devices'), {'org': 'acme'})
+        self.assertEqual(list(response.context['devices']), [self.webcam_us])
+        self.assertEqual(response.context['filters'], {'org': 'acme'})
 
     def test_filter_by_search_id(self):
         response = self.client.get(reverse('devices'), {'search_id': self.search2.id})
@@ -1037,42 +1042,107 @@ class NearbyDevicesTwinTests(TestCase):
 
 
 class IndexDashboardCreditsTests(TestCase):
-    """The dashboard's Shodan/BinaryEdge credit tiles used to render
-    `credits.0`/`credits.1` directly, which is blank/misleading whenever
-    check_credits() only returns 0 or 1 entries (either API call can fail
-    independently). `index` now resolves each into an explicit
-    shodan_credits/binaryedge_credits context value (None when missing, the
-    template renders that as "unavailable")."""
+    """Stage 2: the dashboard no longer blocks its render on check_credits()
+    (a live Shodan + BinaryEdge call) -- that used to make every dashboard
+    load slow, and hang/fail outright when offline. The Shodan/BinaryEdge
+    tiles now load asynchronously via the existing `get_credits` AJAX
+    endpoint (JS fetch, see index.html), so `index()` itself must never call
+    check_credits() and must render instantly regardless of its outcome."""
 
     def setUp(self):
         self.user = User.objects.create_user(username='dash_tester', password='pw12345')
         self.client.force_login(self.user)
 
-    def test_both_credits_present(self):
-        with mock.patch('app_kamerka.views.check_credits', return_value=[100, 200]):
+    def test_index_does_not_call_check_credits(self):
+        with mock.patch('app_kamerka.views.check_credits') as mocked:
             response = self.client.get(reverse('index'))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context['shodan_credits'], 100)
-        self.assertEqual(response.context['binaryedge_credits'], 200)
-        self.assertContains(response, '100')
-        self.assertContains(response, '200')
+        mocked.assert_not_called()
 
-    def test_partial_credits_renders_na_for_missing_one(self):
-        with mock.patch('app_kamerka.views.check_credits', return_value=[100]):
+    def test_index_renders_even_if_check_credits_would_raise(self):
+        # Belt-and-suspenders: even if something were to make check_credits()
+        # blow up, index() no longer calls it at all, so the dashboard still
+        # renders fine.
+        with mock.patch('app_kamerka.views.check_credits', side_effect=Exception("offline")):
             response = self.client.get(reverse('index'))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context['shodan_credits'], 100)
-        self.assertIsNone(response.context['binaryedge_credits'])
-        self.assertContains(response, 'unavailable')
 
-    def test_no_credits_renders_na_for_both(self):
-        with mock.patch('app_kamerka.views.check_credits', return_value=[]):
-            response = self.client.get(reverse('index'))
+    def test_credits_tiles_render_skeleton_and_load_async_via_get_credits(self):
+        response = self.client.get(reverse('index'))
         self.assertEqual(response.status_code, 200)
-        self.assertIsNone(response.context['shodan_credits'])
-        self.assertIsNone(response.context['binaryedge_credits'])
-        # "unavailable" should appear (at least) twice: once for each tile.
-        self.assertContains(response, 'unavailable', count=2)
+        self.assertContains(response, 'id="km-shodan-credits"')
+        self.assertContains(response, 'id="km-binaryedge-credits"')
+        self.assertContains(response, 'km-skeleton')
+        # The page must fetch the credits via the existing AJAX endpoint
+        # after paint, not render them inline server-side.
+        self.assertContains(response, reverse('get_credits'))
+        self.assertNotIn('shodan_credits', response.context)
+        self.assertNotIn('binaryedge_credits', response.context)
+
+
+class IndexDashboardAggregationsTests(TestCase):
+    """Stage 2: dashboard aggregations (honeypot/country counts, top device
+    types, top orgs, recent devices) that make the dashboard useful at 100+
+    devices instead of empty-looking."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='agg_tester', password='pw12345')
+        self.client.force_login(self.user)
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+
+        Device.objects.create(
+            search=self.search, ip='10.0.0.1', type='modbus', category='ics',
+            org='Acme Corp', port='502', country_code='US',
+        )
+        Device.objects.create(
+            search=self.search, ip='10.0.0.2', type='modbus', category='ics',
+            org='Acme Corp', port='502', country_code='DE',
+        )
+        Device.objects.create(
+            search=self.search, ip='10.0.0.3', type='bacnet', category='ics',
+            org='Globex', port='47808', country_code='DE',
+            honeypot_score=HONEYPOT_THRESHOLD,
+        )
+
+    def test_honeypot_and_country_counts(self):
+        response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['honeypot_count'], 1)
+        self.assertEqual(response.context['country_count'], 2)
+
+    def test_top_types_and_top_orgs(self):
+        response = self.client.get(reverse('index'))
+        types = {row['type']: row['c'] for row in response.context['top_types']}
+        orgs = {row['org']: row['c'] for row in response.context['top_orgs']}
+        self.assertEqual(types, {'modbus': 2, 'bacnet': 1})
+        self.assertEqual(orgs, {'Acme Corp': 2, 'Globex': 1})
+
+    def test_recent_devices_present_most_recent_first(self):
+        response = self.client.get(reverse('index'))
+        recent_ips = [d.ip for d in response.context['recent_devices']]
+        self.assertEqual(recent_ips, ['10.0.0.3', '10.0.0.2', '10.0.0.1'])
+
+    def test_dashboard_kpi_tiles_render(self):
+        response = self.client.get(reverse('index'))
+        self.assertContains(response, 'Honeypots flagged')
+        self.assertContains(response, 'Countries')
+        self.assertContains(response, '?honeypot=1')
+
+    def test_dashboard_cards_render_with_links(self):
+        response = self.client.get(reverse('index'))
+        self.assertContains(response, 'Top device types')
+        self.assertContains(response, 'Top orgs')
+        self.assertContains(response, 'Recent devices')
+        self.assertContains(response, '/devices?type=modbus')
+        self.assertContains(response, '/devices?org=Acme')
+
+    def test_empty_state_when_no_devices(self):
+        Device.objects.all().delete()
+        response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'No devices yet')
+        self.assertEqual(response.context['honeypot_count'], 0)
+        self.assertEqual(response.context['country_count'], 0)
 
     def test_progress_bar_hidden_without_active_task(self):
         response = self.client.get(reverse('index'))
