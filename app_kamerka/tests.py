@@ -5,6 +5,7 @@ from django.test import TestCase, Client
 from django.urls import reverse
 
 from app_kamerka.banner_utils import looks_like_generic_http_response
+from app_kamerka.honeypot import score_device, HONEYPOT_THRESHOLD
 from app_kamerka.models import Device, Search
 from app_kamerka.views import is_ajax
 from kamerka import tasks
@@ -270,8 +271,20 @@ class DevicesViewFilterTests(TestCase):
         response = self.client.get(reverse('devices'), {'port': '', 'type': ''})
         self.assertEqual(response.context['devices'].count(), 3)
 
-    def test_unknown_param_is_ignored(self):
-        response = self.client.get(reverse('devices'), {'honeypot': 'yes'})
+    def test_honeypot_filter_restricts_to_flagged_devices(self):
+        # None of the setUp devices are flagged (honeypot_score defaults to
+        # 0), so ?honeypot=1 should return nothing until one is flagged.
+        flagged = Device.objects.create(
+            search=self.search1, ip='10.0.0.9', type='conpot', category='ics',
+            port='102', country_code='US', honeypot_score=HONEYPOT_THRESHOLD,
+        )
+        response = self.client.get(reverse('devices'), {'honeypot': '1'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['devices']), [flagged])
+        self.assertEqual(response.context['filters'], {'honeypot': '1'})
+
+    def test_honeypot_filter_absent_returns_all(self):
+        response = self.client.get(reverse('devices'), {'honeypot': ''})
         self.assertEqual(response.context['devices'].count(), 3)
 
     def test_no_matches_returns_empty_queryset(self):
@@ -416,3 +429,107 @@ class PageSmokeTests(TestCase):
     def test_sources(self):
         response = self.client.get(reverse('sources'))
         self.assertEqual(response.status_code, 200)
+
+
+class ScoreDeviceTests(TestCase):
+    """app_kamerka.honeypot.score_device is a pure function; test it
+    directly with no DB/network involved."""
+
+    def test_conpot_fingerprint_is_flagged(self):
+        banner = "Plant: Technodrome\nModule: Mouser Factory\nSerial: 88111222\n"
+        score, reasons = score_device(data=banner, category='ics', org='Some Industrial ISP')
+        self.assertGreaterEqual(score, HONEYPOT_THRESHOLD)
+        self.assertTrue(any('Conpot' in r for r in reasons))
+
+    def test_cloud_hosted_ics_is_flagged(self):
+        score, reasons = score_device(
+            data='Modbus TCP banner', category='ics', org='DigitalOcean, LLC', hostnames='host.digitalocean.com',
+        )
+        self.assertGreaterEqual(score, HONEYPOT_THRESHOLD)
+        self.assertTrue(any('cloud' in r.lower() for r in reasons))
+
+    def test_normal_ics_on_industrial_isp_is_low_score(self):
+        score, reasons = score_device(
+            data='Modbus TCP\r\nUnit ID: 1\r\nDevice: Schneider Electric PLC\r\n',
+            category='ics', org='Deutsche Telekom AG', hostnames='plc.example-industrial.net',
+        )
+        self.assertLess(score, HONEYPOT_THRESHOLD)
+
+    def test_empty_input_scores_zero(self):
+        score, reasons = score_device()
+        self.assertEqual(score, 0)
+        self.assertEqual(reasons, [])
+
+
+class HoneyscoreViewTests(TestCase):
+    """get_honeyscore: on-demand Shodan HoneyScore check, mirroring the
+    whois/binaryedge AJAX-gated pattern. Shodan itself is mocked -- no
+    network involved."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.client.force_login(self.user)
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
+
+    def _patch_shodan(self, honeyscore_value):
+        class FakeLabs:
+            def honeyscore(self, ip):
+                if honeyscore_value is _RAISE:
+                    raise RuntimeError('boom')
+                return honeyscore_value
+
+        class FakeShodanClient:
+            def __init__(self, api_key):
+                # Mirror the real shodan-python shape: honeyscore lives on
+                # the `labs` sub-client (api.labs.honeyscore).
+                self.labs = FakeLabs()
+
+        patcher = mock.patch.object(tasks, 'Shodan', FakeShodanClient)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_non_ajax_is_400(self):
+        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+    def test_ajax_stores_and_returns_float(self):
+        self._patch_shodan(0.87)
+        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'honeyscore': 0.87})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.honeyscore, 0.87)
+
+    def test_ajax_failure_stores_none(self):
+        self._patch_shodan(_RAISE)
+        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'honeyscore': None})
+        self.device.refresh_from_db()
+        self.assertIsNone(self.device.honeyscore)
+
+
+_RAISE = object()  # sentinel telling FakeShodanClient.honeyscore to raise
+
+
+class SaveDeviceFromResultHoneypotTests(TestCase):
+    """_save_device_from_result must compute and store honeypot_score/
+    honeypot_reasons automatically (no extra API calls) as part of saving
+    every Device, mirroring how the existing worker tests mock Shodan."""
+
+    def test_conpot_banner_sets_honeypot_score(self):
+        search = Search.objects.create(country='US', ics='siemens', coordinates='', coordinates_search='')
+        result = {
+            'ip_str': '5.6.7.8',
+            'product': 'Siemens S7',
+            'org': 'Some Hosting Co',
+            'data': 'Plant: Technodrome\nModule: Mouser Factory\n',
+            'port': 102,
+            'location': {'latitude': 1.0, 'longitude': 2.0, 'city': 'X', 'country_code': 'US'},
+        }
+        tasks._save_device_from_result(search, result, 'siemens', 'ics', 'Original Siemens Equipment Basic Firmware:')
+
+        device = Device.objects.get(ip='5.6.7.8')
+        self.assertGreaterEqual(device.honeypot_score, HONEYPOT_THRESHOLD)
+        self.assertIn('Conpot', device.honeypot_reasons)

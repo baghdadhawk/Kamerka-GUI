@@ -29,6 +29,7 @@ from app_kamerka import exploits
 
 from app_kamerka.models import Device, DeviceNearby, Search, ShodanScan, BinaryEdgeScore, \
     Whois, Bosch
+from app_kamerka.honeypot import score_device
 
 healthcare_queries = {"zoll": "http.favicon.hash:-236942626",
                       'dicom': "dicom",
@@ -790,6 +791,25 @@ def count_devices(country, query):
     return result.get('total', 0)
 
 
+def honeyscore(ip):
+    """Best-effort wrapper around Shodan's api.honeyscore(ip): a 0.0-1.0
+    probability that `ip` is a honeypot. Shodan's honeyscore endpoint is
+    known to be flaky (rate limits, occasional 5xx/timeouts), so any
+    failure is swallowed and reported as None rather than raising -- this
+    is an on-demand, best-effort signal, not a hard dependency.
+    """
+    SHODAN_API_KEY = keys['keys']['shodan']
+    try:
+        api = Shodan(SHODAN_API_KEY)
+        # In shodan-python the honeyscore endpoint lives on the `labs`
+        # sub-client (api.labs.honeyscore), NOT directly on the client.
+        result = api.labs.honeyscore(ip)
+        return float(result)
+    except Exception as e:
+        print(e)
+        return None
+
+
 def _save_device_from_result(search, result, search_type, category, query):
     """Build and save one Device row from a single raw Shodan match `result`.
 
@@ -949,6 +969,20 @@ def _save_device_from_result(search, result, search_type, category, query):
                     lat=lat, lon=lon,
                     country_code=result['location']['country_code'], query=search_type, category=category,
                     vulns=vulns, indicator=indicator, hostnames=hostnames, screenshot=screenshot)
+
+    # Local (offline, no extra API calls) honeypot heuristic. Best-effort:
+    # a scoring error must never prevent the device from being saved.
+    try:
+        honeypot_score, honeypot_reasons = score_device(
+            data=result.get('data', ''), product=product, org=result.get('org', ''),
+            hostnames=hostnames, port=result.get('port'), category=category,
+            ip=result.get('ip_str'), type=search_type,
+        )
+        device.honeypot_score = honeypot_score
+        device.honeypot_reasons = json.dumps(honeypot_reasons)
+    except Exception as e:
+        print(e)
+
     device.save()
 
 

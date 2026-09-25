@@ -126,6 +126,7 @@
                                                     <th>Indicator</th>
                                                 <th>Located</th>
                                                 <th>Exploited</th>
+                                                <th>Honeypot</th>
 
                                             </tr>
                                         </thead>
@@ -153,6 +154,11 @@
                                                 <td> True </td>
                                                     {% else %}
                                                 <td> False </td>
+                                                {% endif %}
+                                                {% if device.honeypot_score >= 50 %}
+                                                <td><span style="background:#ff5050; color:#fff; padding:2px 6px; border-radius:3px;">honeypot ({{ device.honeypot_score }})</span></td>
+                                                {% else %}
+                                                <td></td>
                                                 {% endif %}
                                             </tr>
 

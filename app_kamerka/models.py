@@ -34,6 +34,13 @@ class Device(models.Model):
     scan = models.CharField(max_length=100000, default="")
     exploit = models.CharField(max_length=10000, default="")
     exploited_scanned = models.BooleanField(default=False)
+    # Local heuristic honeypot detection (app_kamerka.honeypot.score_device),
+    # computed automatically at save time, no network required.
+    honeypot_score = models.IntegerField(default=0)
+    honeypot_reasons = models.TextField(default="")  # JSON-encoded list[str]
+    # On-demand Shodan HoneyScore (0.0-1.0), null until a user explicitly
+    # requests it via the "Check HoneyScore" button (get_honeyscore view).
+    honeyscore = models.FloatField(null=True, blank=True, default=None)
 
 class DeviceNearby(models.Model):
     device = models.ForeignKey(Device, on_delete=models.CASCADE)

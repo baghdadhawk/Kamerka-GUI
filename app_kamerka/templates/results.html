@@ -151,6 +151,7 @@
                                                     <th>Indicator</th>
                                                 <th>Located</th>
                                                     <th>Exploited</th>
+                                                    <th>Honeypot</th>
 
 
                                                 </tr>
@@ -176,6 +177,11 @@
                                                     <td>{% for a in device.indicator %}{{ a }} {% endfor %}</td>
                                                     <td>{{ device.located }}</td>
                                                    <td>{{ device.exploited_scanned }}</td>
+                                                   {% if device.honeypot_score >= 50 %}
+                                                   <td><span style="background:#ff5050; color:#fff; padding:2px 6px; border-radius:3px;">honeypot ({{ device.honeypot_score }})</span></td>
+                                                   {% else %}
+                                                   <td></td>
+                                                   {% endif %}
 
 
 

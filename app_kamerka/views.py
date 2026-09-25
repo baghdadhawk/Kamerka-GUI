@@ -18,8 +18,9 @@ from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryE
     Bosch
 from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
     binary_edge_scan, whoisxml, check_credits, send_to_field_agent_task, nmap_scan, validate_nmap, validate_maxmind, scan, \
-    exploit, build_family_selection, count_devices
+    exploit, build_family_selection, count_devices, honeyscore
 from app_kamerka.banner_utils import looks_like_generic_http_response
+from app_kamerka.honeypot import HONEYPOT_THRESHOLD
 
 
 # Create your views here.
@@ -337,8 +338,8 @@ def devices(request):
       - country: match on Device.country_code (case-insensitive)
       - search_id: restrict to a single Search's devices
       - vuln: substring match against the stored vulns (a CVE id)
-      - honeypot: reserved for future use; ignored since there is no
-        corresponding model field yet.
+      - honeypot: truthy (e.g. "1") restricts to devices whose local
+        heuristic honeypot_score is at/above HONEYPOT_THRESHOLD.
     """
     all_devices = Device.objects.all()
 
@@ -374,8 +375,10 @@ def devices(request):
         all_devices = all_devices.filter(vulns__icontains=vuln)
         filters['vuln'] = vuln
 
-    # 'honeypot' is reserved for a future field; there is nothing to filter
-    # on yet, so it is accepted but has no effect.
+    honeypot = request.GET.get('honeypot')
+    if honeypot:
+        all_devices = all_devices.filter(honeypot_score__gte=HONEYPOT_THRESHOLD)
+        filters['honeypot'] = honeypot
 
     for i in all_devices:
         try:
@@ -554,13 +557,21 @@ def device(request, id, device_id, ip):
     else:
         info = ""
 
+    try:
+        honeypot_reasons = json.loads(all_devices.honeypot_reasons) if all_devices.honeypot_reasons else []
+    except Exception:
+        honeypot_reasons = []
+
     context = {'device': all_devices,
                'nearby': nearby,
                "shodan": shodan,
                'google_maps_key': google_maps_key,
                "passwd": info,
                "indicators": meaningful_indicators,
-               "banner_warning": looks_like_generic_http_response(all_devices.data)}
+               "banner_warning": looks_like_generic_http_response(all_devices.data),
+               "honeypot_reasons": honeypot_reasons,
+               "honeypot_threshold": HONEYPOT_THRESHOLD,
+               "is_likely_honeypot": all_devices.honeypot_score >= HONEYPOT_THRESHOLD}
 
     return render(request, 'device.html', context)
 
@@ -720,6 +731,24 @@ def whois(request, id):
         return HttpResponse(json.dumps({'task_id': wh_task.id}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
+
+
+def get_honeyscore(request, id):
+    """On-demand Shodan HoneyScore check (the 2nd, network-based honeypot
+    signal, complementing the automatic local heuristic in honeypot_score).
+    Synchronous (not a celery task): Shodan's honeyscore call is a single
+    lightweight request, unlike the paginated scan/search calls elsewhere in
+    this app. Best-effort: kamerka.tasks.honeyscore() itself never raises,
+    it returns None on any failure.
+    """
+    if is_ajax(request) and request.method == 'GET':
+        device1 = Device.objects.get(id=id)
+        result = honeyscore(device1.ip)
+        device1.honeyscore = result
+        device1.save()
+        return HttpResponse(json.dumps({'honeyscore': result}), content_type='application/json')
+    else:
+        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
 def get_whois(request, id):

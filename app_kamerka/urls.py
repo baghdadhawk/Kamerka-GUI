@@ -29,6 +29,7 @@ urlpatterns = [
     path('get_binaryedge_score/<id>', views.get_binaryedge_score, name="get_binaryedge_score"),
     path('send_to_field_agent/<id>/<notes>', views.send_to_field_agent, name="send_to_field_agent"),
     path('get_binaryedge_score_results/<id>', views.get_binaryedge_score_results, name="get_binaryedge_score_results"),
+    path('get_honeyscore/<id>', views.get_honeyscore, name="get_honeyscore"),
     path('whois/<id>', views.whois, name="whois"),
     path('get_whois/<id>', views.get_whois, name="get_whois"),
     path('scan/<id>', views.scan_dev, name="scan"),

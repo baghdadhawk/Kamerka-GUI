@@ -295,6 +295,47 @@
                         </div>
                         </div>
 
+<div class="row">
+    <div class="col-md-12">
+        <!-- START HONEYPOT BLOCK -->
+        <div class="panel panel-default">
+            <div class="panel-heading ui-draggable-handle">
+                <div class="panel-title-box">
+                    <h3>Honeypot detection</h3>
+                </div>
+            </div>
+            <div class="panel-body padding-2">
+                <p>
+                    <strong>Local heuristic score:</strong> {{ device.honeypot_score }}/100
+                    {% if is_likely_honeypot %}
+                    <span style="background:#ff5050; color:#fff; padding:2px 8px; border-radius:3px;">Likely honeypot</span>
+                    {% else %}
+                    <span style="background:#1caf9a; color:#fff; padding:2px 8px; border-radius:3px;">Probably real</span>
+                    {% endif %}
+                    <br><small>(threshold: {{ honeypot_threshold }})</small>
+                </p>
+                {% if honeypot_reasons %}
+                <strong>Reasons:</strong>
+                <ul>
+                    {% for r in honeypot_reasons %}<li>{{ r }}</li>{% endfor %}
+                </ul>
+                {% else %}
+                <p><small>No local heuristic reasons fired.</small></p>
+                {% endif %}
+
+                <hr>
+                <p><strong>Shodan HoneyScore (on-demand):</strong>
+                    <span id="honeyscore_result">
+                        {% if device.honeyscore != None %}{{ device.honeyscore }}{% else %}not checked{% endif %}
+                    </span>
+                </p>
+                <button type="button" id="honeyscore_check" class="btn btn-primary active">Check HoneyScore (Shodan)</button>
+            </div>
+        </div>
+        <!-- END HONEYPOT BLOCK -->
+    </div>
+</div>
+
 
 
 
@@ -756,6 +797,30 @@ $('#whois_scan').on('click', function(){
         return false;
     });
 
+
+$('#honeyscore_check').on('click', function(){
+       $.ajax({
+        type: "GET",
+        url: "/get_honeyscore/{{device.id}}",
+        success: function (data) {
+                if (data.honeyscore != null) {
+                    $('#honeyscore_result').text(data.honeyscore);
+                    noty({text: "HoneyScore: " + data.honeyscore , layout: 'topRight', type: 'success', timeout: 4000});
+                }
+                else if (data.Error){
+                noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 1000});
+                }
+                else {
+                    $('#honeyscore_result').text("unavailable");
+                    noty({text: "HoneyScore unavailable" , layout: 'topRight', type: 'error', timeout: 4000});
+                }
+            },
+            error: function (data) {
+                console.log("Something went wrong!");
+            }
+        });
+        return false;
+    });
 
 $('#scan').on('click', function(){
        $.ajax({
