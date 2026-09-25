@@ -76,9 +76,15 @@
                 <!-- END BREADCRUMB -->
 
                 <!-- PAGE CONTENT WRAPPER -->
-                <div class="page-content-wrap">
+                <div class="page-content-wrap" id="main" tabindex="-1">
 
                     {% csrf_token %}
+
+                    <!-- START PRINT/REPORT TOOLBAR -->
+                    <div class="km-toolbar">
+                        <button type="button" id="km-print-btn" class="km-btn km-print-btn" onclick="window.print()"><svg class="km-icon" aria-hidden="true"><use href="#icon-printer"></use></svg> Print / Report</button>
+                    </div>
+                    <!-- END PRINT/REPORT TOOLBAR -->
 
                     <!-- START DEVICE SUMMARY HEADER -->
                     <div class="km-device-summary">
@@ -86,11 +92,11 @@
                         <div class="km-device-summary-fields">
                             <div class="km-device-summary-field">
                                 <span class="km-label">Product</span>
-                                <span class="km-value">{% if device.product %}{{ device.product }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
+                                <span class="km-value" dir="auto">{% if device.product %}{{ device.product }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
                             </div>
                             <div class="km-device-summary-field">
                                 <span class="km-label">Org</span>
-                                <span class="km-value">{% if device.org %}{{ device.org }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
+                                <span class="km-value" dir="auto">{% if device.org %}{{ device.org }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
                             </div>
                             <div class="km-device-summary-field">
                                 <span class="km-label">Country</span>
@@ -210,12 +216,12 @@
                 </div>
                 <div class="panel-body km-intel-body">
                     <div class="km-intel-fields">
-                        <b>{{ device.hostnames }}</b>
-                        <span>{{ device.product }}</span>
+                        <b dir="auto">{{ device.hostnames }}</b>
+                        <span dir="auto">{{ device.product }}</span>
                         <span>{{ device.type }}</span>
-                        <span>{{ device.org }}</span>
+                        <span dir="auto">{{ device.org }}</span>
                         <span>{{ device.vulns|slice:"1:-1" }}</span>
-                        <span>{{ device.city }}</span>
+                        <span dir="auto">{{ device.city }}</span>
                     </div>
 
                     {% if banner_warning %}
@@ -226,7 +232,7 @@
                         <strong>Indicators:</strong>
                         {% if indicators %}
                         <ul style="list-style:none; padding:0; margin:0;">
-                            {% for a in indicators %}<li>{{ a }}</li>{% endfor %}
+                            {% for a in indicators %}<li dir="auto">{{ a }}</li>{% endfor %}
                         </ul>
                         {% else %}
                         <span style="opacity:0.6;"> no indicators</span>
@@ -235,7 +241,7 @@
 
                     <details>
                         <summary>Raw banner</summary>
-                        <pre style="text-align:left; white-space:pre-wrap; word-break:break-word;">{{ device.data }}</pre>
+                        <pre dir="auto" style="text-align:left; white-space:pre-wrap; word-break:break-word;">{{ device.data }}</pre>
                     </details>
 
                     {{ device.ssl }}
@@ -346,7 +352,7 @@
                     </div>
                 </div>
                 <div class="panel-body padding-2 km-notes-box">
-                    <textarea id="device_notes_text">{{ device.notes }}</textarea>
+                    <textarea id="device_notes_text" dir="auto">{{ device.notes }}</textarea>
                     <br><br>
                     <button type="button" id="save_notes" class="btn btn-primary active">Save notes</button>
                 </div>

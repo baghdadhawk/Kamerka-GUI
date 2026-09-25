@@ -143,7 +143,11 @@
 
   --km-text: #131a24;
   --km-text-dim: #3c4757;
-  --km-text-muted: #67728a;
+  /* AA fix (Stage 5): the previous #67728a was 4.46:1 on --km-bg
+     (#f4f6f9), just under the 4.5:1 body-text minimum. #5c6980 lands at
+     5.12:1 on --km-bg and 5.54:1 on --km-surface (white) -- see the
+     contrast table in the Stage 5 report. */
+  --km-text-muted: #5c6980;
 
   --km-accent: #0077a3;
   --km-accent-dim: #005f82;
@@ -191,6 +195,38 @@
 :root[data-theme="light"] .btn.btn-primary.active,
 :root[data-theme="light"] button.btn-primary {
   color: #ffffff !important;
+}
+
+/* AA fix (Stage 5): .km-badge-danger/.km-badge-success/.km-cve-badge and
+   the "confirmed" status-pill use a fixed light-on-dark text color tuned
+   for the dark surfaces they were designed against (contrast ~6-7.5:1
+   there). Against the light theme's near-white surfaces the same pastel
+   background + light text drops to ~1.4-1.9:1 -- these overrides swap in
+   darker, more saturated text (and a slightly stronger tint) so every
+   badge clears 4.5:1 in light mode too (verified: danger 7.55:1, success
+   6.61:1, cve/warning 6.54:1 -- see the Stage 5 report). */
+:root[data-theme="light"] .km-badge-danger,
+:root[data-theme="light"] .km-status-btn.km-status-active[data-status="confirmed"] {
+  background: rgba(198, 40, 40, 0.14);
+  color: #8c1414;
+  border-color: rgba(198, 40, 40, 0.4);
+}
+
+:root[data-theme="light"] .km-badge-success {
+  background: rgba(21, 122, 88, 0.14);
+  color: #0b5c40;
+  border-color: rgba(21, 122, 88, 0.35);
+}
+
+:root[data-theme="light"] .km-cve-badge {
+  background: rgba(150, 99, 0, 0.16);
+  color: #6e4800;
+  border-color: rgba(150, 99, 0, 0.4);
+}
+
+:root[data-theme="light"] .km-cve-badge:hover {
+  background: rgba(150, 99, 0, 0.28);
+  color: #4d3200 !important;
 }
 
 :root[data-theme="light"] .panel-heading,
@@ -273,6 +309,53 @@ a:hover { color: var(--km-accent-2); }
 
 :focus-visible {
   outline: 2px solid var(--km-accent);
+  outline-offset: 2px;
+}
+
+/* Rounded/pill or overflow:hidden controls clip a default outline, or sit
+   on a colored fill where a same-hue outline would nearly disappear --
+   give those a visible, offset ring explicitly. Covers: nav links, the
+   theme/density toggles, tabs, status pills, table sort/paginate
+   controls, and plain form controls. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+.km-btn:focus-visible,
+.km-status-btn:focus-visible,
+.km-theme-toggle:focus-visible,
+.km-cve-badge:focus-visible,
+#app-nav ul li a:focus-visible,
+.panel.tabs .nav-tabs > li > a:focus-visible,
+.tab-list__link:focus-visible,
+.dataTables_wrapper .dataTables_paginate .paginate_button:focus-visible {
+  outline: 2px solid var(--km-accent);
+  outline-offset: 2px;
+  border-radius: var(--km-radius-sm);
+}
+
+/* Skip-to-content link (_nav.html) -- visually hidden until focused, then
+   pinned to the top-left corner above everything else. */
+.km-skip-link {
+  position: absolute;
+  top: -48px;
+  left: 8px;
+  z-index: 2000;
+  background: var(--km-accent);
+  color: #001217;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 8px 14px;
+  border-radius: var(--km-radius-sm);
+  text-decoration: none !important;
+  transition: top 0.15s ease;
+}
+
+.km-skip-link:focus {
+  top: 8px;
+  outline: 2px solid var(--km-text);
   outline-offset: 2px;
 }
 
@@ -1571,5 +1654,154 @@ button.km-loading::after {
   .num-count {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* ==========================================================================
+   Density toggle (Stage 5) — data-density="compact" on <html>, set by the
+   nav toggle (_nav.html), persisted in localStorage as km-density=compact.
+   Overrides only the spacing tokens the rest of this file already reads
+   from (--km-space-*, table cell padding, card/KPI padding), so every rule
+   above tightens up for free -- most valuable on the devices/results
+   tables where a compact row lets far more of the list stay on screen.
+   Default stays "comfortable" (no attribute).
+   ========================================================================== */
+:root[data-density="compact"] {
+  --km-space-1: 2px;
+  --km-space-2: 5px;
+  --km-space-3: 8px;
+  --km-space-4: 10px;
+  --km-space-5: 14px;
+  --km-space-6: 20px;
+}
+
+:root[data-density="compact"] table.table > thead > tr > th,
+:root[data-density="compact"] table.datatable thead th,
+:root[data-density="compact"] table.table > tbody > tr > td,
+:root[data-density="compact"] table.datatable tbody td,
+:root[data-density="compact"] .km-table-compact th,
+:root[data-density="compact"] .km-table-compact td {
+  padding-block: 3px;
+}
+
+:root[data-density="compact"] .widget.widget-item-icon {
+  gap: var(--km-space-2);
+}
+
+:root[data-density="compact"] .widget-item-left {
+  width: 34px;
+  height: 34px;
+  font-size: 1rem;
+}
+
+:root[data-density="compact"] .widget-int,
+:root[data-density="compact"] .widget-int.num-count {
+  font-size: 1.25rem;
+}
+
+:root[data-density="compact"] .km-device-summary {
+  padding-block: var(--km-space-3);
+}
+
+:root[data-density="compact"] .panel-body {
+  font-size: 0.92rem;
+}
+
+/* ==========================================================================
+   Print / report view (Stage 5) — "Print / Report" button on device.html
+   and results.html calls window.print(); this stylesheet turns that into a
+   clean, CERT-ready document: chrome (nav, toolbars, buttons, toggles,
+   maps, tabs' inactive panes) is hidden, colors are flattened to black on
+   white, <details> (raw banner) is forced open, and cards avoid breaking
+   mid-block across pages.
+   ========================================================================== */
+@media print {
+  #app-nav,
+  .km-skip-link,
+  .km-toolbar,
+  .km-coldrop-menu,
+  .km-status-control,
+  .km-print-btn,
+  .btn,
+  button,
+  #google_world_map,
+  #dashboard-map-seles,
+  .panel-body-map,
+  .dataTables_wrapper .dataTables_filter,
+  .dataTables_wrapper .dataTables_length,
+  .dataTables_wrapper .dataTables_paginate,
+  .dataTables_wrapper .dataTables_info,
+  .nav-tabs,
+  progress,
+  form#form1,
+  .km-guard-overlay {
+    display: none !important;
+  }
+
+  * {
+    color: #000 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  html, body {
+    background: #fff !important;
+  }
+
+  a {
+    color: #000 !important;
+    text-decoration: underline;
+  }
+
+  /* Show the destination of a link next to it -- useful for CVE/whois/
+     external references in a printed report -- but skip in-page anchors
+     and the CVE badges (their own href already reads as plain text). */
+  a[href^="http"]:not(.km-cve-badge)::after {
+    content: " (" attr(href) ")";
+    font-size: 0.75em;
+    font-weight: 400;
+  }
+
+  .panel,
+  .km-device-summary,
+  .km-device-grid-primary > .panel,
+  .km-device-grid-secondary > .panel {
+    border: 1px solid #999 !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .km-device-grid {
+    display: block;
+  }
+
+  /* Every tab pane must render (not just the one currently .active) so a
+     printed device/results report includes Locate/Intel/Exploit or
+     Map/Devices/Statistics content, not whatever tab happened to be open. */
+  .tab-pane {
+    display: block !important;
+    opacity: 1 !important;
+  }
+
+  /* Raw banner etc. must print expanded, not collapsed. */
+  details {
+    display: block !important;
+  }
+
+  details > summary {
+    display: none !important;
+  }
+
+  pre {
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    border: 1px solid #999 !important;
+  }
+
+  .km-badge-danger,
+  .km-badge-success {
+    border: 1px solid #000 !important;
   }
 }

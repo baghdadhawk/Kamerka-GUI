@@ -92,7 +92,7 @@
                 <!-- PAGE CONTENT WRAPPER -->
 
                 <!-- PAGE CONTENT WRAPPER -->
-                <div class="page-content-wrap">
+                <div class="page-content-wrap" id="main" tabindex="-1">
 
                     <!-- START WIDGETS -->
                  <div class="row">
@@ -130,6 +130,8 @@
                                         <a class="km-btn" href="{% url 'results' id=search_id %}?{{ honeypot_base_qs }}&honeypot=1">&#9888; Only honeypots</a>
                                         <a class="km-btn km-btn-danger" href="{% url 'results' id=search_id %}?{{ honeypot_base_qs }}&hide_honeypot=1">&#128683; Hide honeypots</a>
                                         <a class="km-btn" href="{% url 'results' id=search_id %}">All</a>
+                                        <span style="width:1px; align-self:stretch; background:var(--km-border);"></span>
+                                        <button type="button" id="km-print-btn" class="km-btn km-print-btn" onclick="window.print()"><svg class="km-icon" aria-hidden="true"><use href="#icon-printer"></use></svg> Print / Report</button>
                                         <span style="width:1px; align-self:stretch; background:var(--km-border);"></span>
                                         <div class="km-coldrop">
                                             <button type="button" class="km-btn" id="results-coldrop-btn">&#9776; Columns</button>
@@ -170,13 +172,13 @@
                                                     <td>                                     <a href="{% url 'device' id=device.search_id ip=device.ip device_id=device.id %}">
                                                         {{ device.ip }}</a></td>
                                                     <td>{{ device.type }}</td>
-                                                    <td><span class="km-truncate" title="{%if device.type == "NMAP" %}{{device.port}}{% else %}{{ device.product }}{% endif %}">{%if device.type == "NMAP" %} {{device.port}} {% else %} {{ device.product }}{% endif %}</span></td>
+                                                    <td dir="auto"><span class="km-truncate" title="{%if device.type == "NMAP" %}{{device.port}}{% else %}{{ device.product }}{% endif %}">{%if device.type == "NMAP" %} {{device.port}} {% else %} {{ device.product }}{% endif %}</span></td>
                                                     <td>{{ device.port }}</td>
-                                                    <td>{{ device.city }}</td>
+                                                    <td dir="auto">{{ device.city }}</td>
                                                     <td>{{ device.lat }}</td>
                                                     <td>{{ device.lon }}</td>
                                                     <td>{% for cve in device.cves %}<a class="km-cve-badge" href="https://nvd.nist.gov/vuln/detail/{{ cve }}" target="_blank" rel="noopener">{{ cve }}</a>{% endfor %}</td>
-                                                    <td><span class="km-truncate" title="{% for a in device.indicator %}{{ a }} {% endfor %}">{% for a in device.indicator %}{{ a }} {% endfor %}</span></td>
+                                                    <td dir="auto"><span class="km-truncate" title="{% for a in device.indicator %}{{ a }} {% endfor %}">{% for a in device.indicator %}{{ a }} {% endfor %}</span></td>
                                                     <td>{% if device.located %}<span class="km-icon-yes">&#10003;</span>{% else %}<span class="km-icon-no">&#10007;</span>{% endif %}</td>
                                                    <td>{% if device.exploited_scanned %}<span class="km-icon-yes">&#10003;</span>{% else %}<span class="km-icon-no">&#10007;</span>{% endif %}</td>
                                                    {% if device.honeypot_score >= 50 %}

@@ -1,5 +1,6 @@
 {% load static %}
 {% include '_icons.svg' %}
+<a href="#main" class="km-skip-link">Skip to main content</a>
 <nav id="app-nav">
     <div class="app-navbar-inner">
         <a class="app-navbar-brand" href="{% url 'search_main' %}"><span class="dot"></span> ꓘamerka</a>
@@ -12,6 +13,9 @@
             <li><a href="{% url 'gallery' %}">Gallery</a></li>
             <li><a href="{% url 'sources' %}">Sources</a></li>
             <li><a href="/admin/logout/">Log out</a></li>
+            <li>
+                <button type="button" id="km-density-toggle" class="km-theme-toggle" title="Switch to compact density" aria-label="Switch to compact density" aria-pressed="false"><svg class="km-icon" aria-hidden="true"><use href="#icon-rows"></use></svg></button>
+            </li>
             <li>
                 <button type="button" id="km-theme-toggle" class="km-theme-toggle" title="Toggle light/dark theme" aria-label="Toggle light/dark theme"><svg class="km-icon" aria-hidden="true"><use href="#icon-sun"></use></svg></button>
             </li>
@@ -87,6 +91,47 @@
                     window.kamReapplyGoogleMapTheme();
                 }
             } catch (e) {}
+        });
+    }
+})();
+
+(function () {
+    // Density (comfortable/compact) toggle. Same pattern as the theme
+    // toggle above: persists in localStorage, applied as
+    // data-density="compact" on <html> (absence = comfortable/default).
+    // Purely a spacing-token override in kamerka-modern.css -- no JS
+    // elsewhere depends on this attribute.
+    var STORAGE_KEY = 'km-density';
+    var root = document.documentElement;
+    var btn = document.getElementById('km-density-toggle');
+
+    function applyDensity(density) {
+        if (density === 'compact') {
+            root.setAttribute('data-density', 'compact');
+            if (btn) {
+                btn.title = 'Switch to comfortable density';
+                btn.setAttribute('aria-label', 'Switch to comfortable density');
+                btn.setAttribute('aria-pressed', 'true');
+            }
+        } else {
+            root.removeAttribute('data-density');
+            if (btn) {
+                btn.title = 'Switch to compact density';
+                btn.setAttribute('aria-label', 'Switch to compact density');
+                btn.setAttribute('aria-pressed', 'false');
+            }
+        }
+    }
+
+    var stored = null;
+    try { stored = window.localStorage.getItem(STORAGE_KEY); } catch (e) {}
+    applyDensity(stored === 'compact' ? 'compact' : 'comfortable');
+
+    if (btn) {
+        btn.addEventListener('click', function () {
+            var next = root.getAttribute('data-density') === 'compact' ? 'comfortable' : 'compact';
+            applyDensity(next);
+            try { window.localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
         });
     }
 })();

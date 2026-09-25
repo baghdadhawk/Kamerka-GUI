@@ -81,8 +81,8 @@
                 <!-- END BREADCRUMB -->                       
                 
                 <!-- PAGE CONTENT WRAPPER -->
-                <div class="page-content-wrap">
-                    
+                <div class="page-content-wrap" id="main" tabindex="-1">
+
                     <!-- START WIDGETS -->
                     <div class="row">
                         <div class="col-md-3">
@@ -271,7 +271,7 @@
                                             <tbody>
                                                 <tr>{% for object in search %}
 
-                                                        <td><strong><a href="{% url 'results' id=object.id %}">{{object.country}} {{object.coordinates }}  {% if object.country == "NMAP Scan" %} {{object.ics}} {% endif %}</strong></td>
+                                                        <td dir="auto"><strong><a href="{% url 'results' id=object.id %}">{{object.country}} {{object.coordinates }}  {% if object.country == "NMAP Scan" %} {{object.ics}} {% endif %}</strong></td>
                                                 </a>
                                                 </tr>
 
@@ -385,7 +385,7 @@
                                         <li>
                                             <a class="km-rank-row" href="{% url 'devices' %}?org={{ row.org|urlencode }}">
                                                 <div class="km-rank-row-head">
-                                                    <span class="km-rank-label" title="{{ row.org }}">{{ row.org }}</span>
+                                                    <span class="km-rank-label" title="{{ row.org }}" dir="auto">{{ row.org }}</span>
                                                     <span class="km-rank-count">{{ row.c }}</span>
                                                 </div>
                                                 <div class="km-rank-bar-track">
@@ -430,7 +430,7 @@
                                                 <tr>
                                                     <td><a href="{% url 'device' id=d.search_id device_id=d.id ip=d.ip %}">{{ d.ip }}</a></td>
                                                     <td>{{ d.type }}</td>
-                                                    <td><span class="km-truncate" title="{{ d.org }}">{{ d.org }}</span></td>
+                                                    <td dir="auto"><span class="km-truncate" title="{{ d.org }}">{{ d.org }}</span></td>
                                                     <td>{{ d.country_code }}</td>
                                                     <td>{{ d.port }}</td>
                                                     <td>{% if d.honeypot_score >= 50 %}<span class="km-badge km-badge-danger">&#9888; honeypot</span>{% endif %}</td>
