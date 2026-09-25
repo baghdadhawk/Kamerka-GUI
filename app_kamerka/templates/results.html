@@ -312,7 +312,8 @@
 
 
         <!-- END MESSAGE BOX--><script async defer
-    src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&callback=myMap&libraries=places" type="text/javascript"></script>
+    src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&libraries=places" type="text/javascript"
+    onerror="window.kamMapLoadFailed = true;"></script>
          <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
 <!--<br>{% if device.screenshot %}
 marker['infowindow'] = new
@@ -324,25 +325,26 @@ google.maps.InfoWindow({
 var marker;
 var gm_map;
 var markerArray = [];
-{% for device in search %}
-    {% if forloop.first %}
-    var mumbai = new google.maps.LatLng({{ device.lat }},{{ device.lon }});
-    {% endif %}
-    {% endfor %}
-var infoWindow = new google.maps.InfoWindow();
+var infoWindow;
 
 function initialize() {
+    // See map.html's kamMapLoadFailed guard -- this script tag is
+    // async/defer, so these must not run before google.maps is confirmed
+    // loaded, hence living inside initialize() rather than at top level.
+    infoWindow = new google.maps.InfoWindow();
+    var mumbai = new google.maps.LatLng(20, 0);
+    {% for device in search %}
+    {% if forloop.first %}
+    mumbai = new google.maps.LatLng({{ device.lat }},{{ device.lon }});
+    {% endif %}
+    {% endfor %}
     var clusterMarkers = [
               {% for device in search %}
 
             marker = new google.maps.Marker({
             position: new google.maps.LatLng({{device.lat}},{{device.lon}}),
             map: gm_map,
-            {% if device.screenshot %}
-            title: "<a href={{device.search_id}}/{{device.id}}/{{device.ip}}> {{device.type}} - {{device.ip}}</a>",
-            {% else %}
-            title: "<a href={{device.search_id}}/{{device.id}}/{{device.ip}}> {{device.type}} - {{device.ip}}</a>",
-            {% endif %}
+            title: "<a href=/results/{{device.search_id}}/{{device.id}}/{{device.ip}}> {{device.type}} - {{device.ip}}</a>",
             {% if device.type == "niagara" %}
             icon: "{% static 'images/blue.png' %}",
             {% elif device.type == "modbus" %}
@@ -659,10 +661,21 @@ function initialize() {
         })(marker));
     }
 
-}$(document).ready(function() {
+}
+function kamShowMapLoadError(){
+    var el = document.getElementById('google_world_map');
+    if (el) {
+        el.innerHTML = '<div class="km-empty-state" style="height:100%;">Map unavailable &mdash; the Google Maps API key is missing or invalid.</div>';
+    }
+}
+$(document).ready(function() {
 
     // INITIALIZE GOOGLE MAPS
-    initialize();
+    if (window.kamMapLoadFailed || typeof google === 'undefined' || !google.maps) {
+        kamShowMapLoadError();
+    } else {
+        initialize();
+    }
 
 
     // CLOSE

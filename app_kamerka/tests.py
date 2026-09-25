@@ -933,3 +933,122 @@ class NearbyDevicesTwinTests(TestCase):
     def test_get_nearby_devices_coordinates_non_ajax_is_400(self):
         response = self.client.get(reverse('get_nearby_devices_coordinates', args=[self.device.id]))
         self.assertEqual(response.status_code, 400)
+
+
+class IndexDashboardCreditsTests(TestCase):
+    """The dashboard's Shodan/BinaryEdge credit tiles used to render
+    `credits.0`/`credits.1` directly, which is blank/misleading whenever
+    check_credits() only returns 0 or 1 entries (either API call can fail
+    independently). `index` now resolves each into an explicit
+    shodan_credits/binaryedge_credits context value (None when missing, the
+    template renders that as "n/a")."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='dash_tester', password='pw12345')
+        self.client.force_login(self.user)
+
+    def test_both_credits_present(self):
+        with mock.patch('app_kamerka.views.check_credits', return_value=[100, 200]):
+            response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['shodan_credits'], 100)
+        self.assertEqual(response.context['binaryedge_credits'], 200)
+        self.assertContains(response, '100')
+        self.assertContains(response, '200')
+
+    def test_partial_credits_renders_na_for_missing_one(self):
+        with mock.patch('app_kamerka.views.check_credits', return_value=[100]):
+            response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['shodan_credits'], 100)
+        self.assertIsNone(response.context['binaryedge_credits'])
+        self.assertContains(response, 'n/a')
+
+    def test_no_credits_renders_na_for_both(self):
+        with mock.patch('app_kamerka.views.check_credits', return_value=[]):
+            response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context['shodan_credits'])
+        self.assertIsNone(response.context['binaryedge_credits'])
+        # "n/a" should appear (at least) twice: once for each tile.
+        self.assertContains(response, 'n/a', count=2)
+
+    def test_progress_bar_hidden_without_active_task(self):
+        response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'id="task-progress-wrapper"')
+
+    def test_progress_bar_shown_with_active_task(self):
+        session = self.client.session
+        session['task_id'] = 'fake-task-id'
+        session.save()
+        response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="task-progress-wrapper"')
+
+
+class DeviceTriagePageTests(TestCase):
+    """UI wiring for Device.status / set_device_status and the "other
+    sightings" cross-search de-dupe: the device page now shows a status
+    control built from Device.STATUS_CHOICES and an other-sightings list."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='triage_tester', password='pw12345')
+        self.client.force_login(self.user)
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+
+    def _device_url(self, device):
+        return reverse('device', args=[device.search_id, device.id, device.ip])
+
+    def test_status_choices_in_context_and_rendered(self):
+        device = Device.objects.create(
+            search=self.search, ip='1.2.3.4', type='modbus', category='ics', status='new',
+        )
+        response = self.client.get(self._device_url(device))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['status_choices']), list(Device.STATUS_CHOICES))
+        for value, display in Device.STATUS_CHOICES:
+            self.assertContains(response, 'data-status="%s"' % value)
+        self.assertContains(response, 'km-status-active')
+
+    def test_summary_header_shows_key_facts(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.20.30.40', type='modbus', category='ics',
+            product='Acme PLC', org='Acme Corp', country_code='US', port='502',
+        )
+        response = self.client.get(self._device_url(device))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '10.20.30.40')
+        self.assertContains(response, 'Acme PLC')
+        self.assertContains(response, 'Acme Corp')
+        self.assertContains(response, '502')
+
+    def test_no_other_sightings_shows_none_message(self):
+        device = Device.objects.create(search=self.search, ip='1.1.1.1', type='modbus', category='ics')
+        response = self.client.get(self._device_url(device))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'None')
+
+    def test_other_sightings_links_to_device_page(self):
+        other_search = Search.objects.create(country='DE', ics='bacnet', coordinates='', coordinates_search='')
+        device = Device.objects.create(search=self.search, ip='2.2.2.2', type='modbus', category='ics')
+        other = Device.objects.create(search=other_search, ip='2.2.2.2', type='bacnet', category='ics')
+
+        response = self.client.get(self._device_url(device))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse('device', args=[other.search_id, other.id, other.ip]))
+
+    def test_set_device_status_updates_and_page_reflects_it(self):
+        device = Device.objects.create(search=self.search, ip='3.3.3.3', type='modbus', category='ics', status='new')
+
+        response = self.client.get(
+            reverse('set_device_status', args=[device.id]), {'status': 'confirmed'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'status': 'confirmed'})
+
+        device.refresh_from_db()
+        self.assertEqual(device.status, 'confirmed')
+
+        page = self.client.get(self._device_url(device))
+        self.assertContains(page, 'km-status-active" data-status="confirmed"')

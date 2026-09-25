@@ -108,6 +108,48 @@
                 <!-- PAGE CONTENT WRAPPER -->
                 <div class="page-content-wrap">
 
+                    {% csrf_token %}
+
+                    <!-- START DEVICE SUMMARY HEADER -->
+                    <div class="km-device-summary">
+                        <h2>{{ device.ip }}</h2>
+                        <div class="km-device-summary-fields">
+                            <div class="km-device-summary-field">
+                                <span class="km-label">Product</span>
+                                <span class="km-value">{% if device.product %}{{ device.product }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
+                            </div>
+                            <div class="km-device-summary-field">
+                                <span class="km-label">Org</span>
+                                <span class="km-value">{% if device.org %}{{ device.org }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
+                            </div>
+                            <div class="km-device-summary-field">
+                                <span class="km-label">Country</span>
+                                <span class="km-value">{% if device.country_code %}{{ device.country_code }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
+                            </div>
+                            <div class="km-device-summary-field">
+                                <span class="km-label">Open port</span>
+                                <span class="km-value">{% if device.port %}{{ device.port }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
+                            </div>
+                            <div class="km-device-summary-field">
+                                <span class="km-label">Honeypot verdict</span>
+                                <span class="km-value">
+                                    {% if is_likely_honeypot %}
+                                    <span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:2px 8px; border-radius:3px;">&#9888; Likely honeypot</span>
+                                    {% else %}
+                                    <span class="km-badge km-badge-success" style="background:#1caf9a; color:#fff; padding:2px 8px; border-radius:3px;">&#10003; Probably real</span>
+                                    {% endif %}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="km-status-control" id="device-status-control" data-device-id="{{ device.id }}">
+                            <span class="km-label" style="text-transform:uppercase; font-size:0.7rem; color:var(--km-text-muted); margin-right:4px;">Triage:</span>
+                            {% for value, display in status_choices %}
+                            <button type="button" class="km-status-btn {% if device.status == value %}km-status-active{% endif %}" data-status="{{ value }}">{{ display }}</button>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <!-- END DEVICE SUMMARY HEADER -->
+
                     <!-- START WIDGETS -->
                  <div class="row">
                         <div class="col-md-6" style="width:100%">
@@ -115,15 +157,15 @@
                             <div class="panel panel-default tabs">
                                 <ul class="nav nav-tabs nav-justified">
                                        {% if device.located %}
-                                                                    <li class="active"><a href="#tab8" data-toggle="tab" style="background:#ff00cd">Locate</a></li>
+                                                                    <li><a href="#tab8" data-toggle="tab" style="background:#ff00cd">Locate</a></li>
                                     {% else %}
-                                    <li class="active"><a href="#tab8" data-toggle="tab">Locate</a></li>
+                                    <li><a href="#tab8" data-toggle="tab">Locate</a></li>
                                         {% endif %}
-                                    <li><a href="#tab9" data-toggle="tab">Intel</a></li>
+                                    <li class="active"><a href="#tab9" data-toggle="tab">Intel</a></li>
                                     <li><a href="#tab10" data-toggle="tab">Exploit</a></li>
                                 </ul>
                                 <div class="panel-body tab-content">
-                                    <div class="tab-pane active" id="tab8">
+                                    <div class="tab-pane" id="tab8">
                                         <div class="panel panel-default">
                                             {% if device.located %}
                                 <div class="panel-heading" style="background:#ff00cd">
@@ -184,7 +226,7 @@
 
 
 
-<div class="tab-pane" id="tab9">
+<div class="tab-pane active" id="tab9">
     <div class="panel panel-default">
                                 <div class="panel-heading">
                                     <h3 class="panel-title">{{ device.ip }}</h3>
@@ -337,6 +379,51 @@
     </div>
 </div>
 
+<div class="row">
+    <div class="col-md-6">
+        <!-- START NOTES BLOCK -->
+        <div class="panel panel-default">
+            <div class="panel-heading ui-draggable-handle">
+                <div class="panel-title-box">
+                    <h3>Notes</h3>
+                </div>
+            </div>
+            <div class="panel-body padding-2 km-notes-box">
+                <textarea id="device_notes_text">{{ device.notes }}</textarea>
+                <br><br>
+                <button type="button" id="save_notes" class="btn btn-primary active">Save notes</button>
+            </div>
+        </div>
+        <!-- END NOTES BLOCK -->
+    </div>
+
+    <div class="col-md-6">
+        <!-- START OTHER SIGHTINGS BLOCK -->
+        <div class="panel panel-default">
+            <div class="panel-heading ui-draggable-handle">
+                <div class="panel-title-box">
+                    <h3>Other sightings{% if sightings_count %} ({{ sightings_count }}){% endif %}</h3>
+                </div>
+            </div>
+            <div class="panel-body padding-2">
+                {% if other_sightings %}
+                <ul class="km-sightings-list">
+                    {% for s in other_sightings %}
+                    <li>
+                        <a href="{% url 'device' id=s.search_id device_id=s.id ip=s.ip %}">{{ s.ip }}</a>
+                        &mdash; {{ s.type }}{% if s.category %} ({{ s.category }}){% endif %}
+                        {% if s.honeypot_score >= honeypot_threshold %}<span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:1px 6px; border-radius:3px;">honeypot</span>{% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p><small>None &mdash; this is the only time this IP has been seen.</small></p>
+                {% endif %}
+            </div>
+        </div>
+        <!-- END OTHER SIGHTINGS BLOCK -->
+    </div>
+</div>
 
 
 
@@ -458,7 +545,7 @@
                             <!-- START DATATABLE EXPORT -->
 
 
-<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&callback=myMap&libraries=places"></script>
+<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&libraries=places"></script>
 
 <script>
 function AddMarker() {
@@ -1105,6 +1192,73 @@ console.log(response);
 
 });
 
+</script>
+
+<script type="text/javascript">
+    // Generic loading-spinner feedback for the existing AJAX action buttons
+    // (shodan/binaryedge/whois/honeyscore/scan/exploit) -- purely additive,
+    // does not touch their handlers/endpoints above; noty() success/error
+    // toasts for those already exist in the handlers themselves.
+    $(document).on('click', '#shodan_scan, #binaryedge_scan, #whois_scan, #honeyscore_check, #scan, #exploit', function () {
+        $(this).addClass('km-loading').prop('disabled', true);
+    });
+    $(document).ajaxComplete(function () {
+        $('.km-loading').removeClass('km-loading').prop('disabled', false);
+    });
+
+    // Triage status control (Device.status / set_device_status endpoint).
+    $(document).on('click', '.km-status-btn', function () {
+        var $btn = $(this);
+        var newStatus = $btn.data('status');
+        var deviceId = $('#device-status-control').data('device-id');
+        var csrftoken = $('input[name=csrfmiddlewaretoken]').val();
+
+        $btn.addClass('km-loading').prop('disabled', true);
+        $.ajax({
+            type: 'POST',
+            url: '/set_device_status/' + deviceId,
+            data: {status: newStatus},
+            headers: {'X-CSRFToken': csrftoken},
+            success: function (data) {
+                if (data.status) {
+                    $('.km-status-btn').removeClass('km-status-active');
+                    $btn.addClass('km-status-active');
+                    noty({text: "Status set to " + data.status, layout: 'topRight', type: 'success', timeout: 2000});
+                } else if (data.Error) {
+                    noty({text: data.Error, layout: 'topRight', type: 'error', timeout: 2000});
+                }
+            },
+            error: function () {
+                noty({text: "Failed to update status", layout: 'topRight', type: 'error', timeout: 2000});
+            },
+            complete: function () {
+                $btn.removeClass('km-loading').prop('disabled', false);
+            }
+        });
+    });
+
+    // Save notes (reuses the send_to_field_agent endpoint already used by
+    // the "Send" button on the Locate tab).
+    $('#save_notes').on('click', function () {
+        var $btn = $(this);
+        var notes = $('#device_notes_text').val() || ' ';
+        var deviceId = $('#device-status-control').data('device-id');
+
+        $btn.addClass('km-loading').prop('disabled', true);
+        $.ajax({
+            type: 'GET',
+            url: '/send_to_field_agent/' + deviceId + '/' + encodeURIComponent(notes),
+            success: function () {
+                noty({text: "Notes saved", layout: 'topRight', type: 'success', timeout: 2000});
+            },
+            error: function () {
+                noty({text: "Failed to save notes", layout: 'topRight', type: 'error', timeout: 2000});
+            },
+            complete: function () {
+                $btn.removeClass('km-loading').prop('disabled', false);
+            }
+        });
+    });
 </script>
 
         <!-- START TEMPLATE -->

@@ -1,3 +1,28 @@
+/* Shared restrained categorical palette for every dashboard chart (Morris
+   bar/donut, the vulnerabilities wordcloud), derived from the theme's CSS
+   custom properties (kamerka-modern.css :root) so it tracks the active
+   theme (dark/light, see the theme toggle in _nav.html) instead of a
+   separate hardcoded color list. Falls back to sane literals if the
+   variables are ever missing (e.g. this script runs before the stylesheet
+   parses). */
+function kamChartPalette(){
+    var css = (document.documentElement && window.getComputedStyle) ?
+        window.getComputedStyle(document.documentElement) : null;
+    function v(name, fallback){
+        var val = css ? css.getPropertyValue(name) : '';
+        val = val ? val.trim() : '';
+        return val || fallback;
+    }
+    return [
+        v('--km-chart-1', '#00e1ff'),
+        v('--km-chart-2', '#22c58b'),
+        v('--km-chart-3', '#ffb020'),
+        v('--km-chart-4', '#7c93ff'),
+        v('--km-chart-5', '#00b8d1'),
+        v('--km-chart-6', '#4fe0b3')
+    ];
+}
+
 function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, countries){
 //console.log(ports)
     /* reportrange */
@@ -33,46 +58,65 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
         "Healthcare": "healthcare"
     };
 
-    /* Donut dashboard chart */
-    var dashboardDonut = Morris.Donut({
-        labelColor: '#00E1FF',
-        element: 'dashboard-donut-1',
-        data: [
-            {label: "ICS", value: ics_len, labelColor: '#ff00cd'},
+    /* Donut dashboard chart -- one restrained categorical palette (cyan
+       primary + harmonious hues) shared with the bar chart and wordcloud,
+       see kamChartPalette() above, plus an HTML legend since Morris has no
+       built-in one. */
+    var kamPalette = kamChartPalette();
+    if ($('#dashboard-donut-1').length > 0) {
+        var donutData = [
+            {label: "ICS", value: ics_len},
             {label: "Coordinates", value: coordinates_search_len},
             {label: "Healthcare", value: healthcare_len},
-        ],
-        colors: ["#00E1FF", "#0064d7",'#ff00cd'],
-        resize: true
-    });
-    dashboardDonut.on('click', function(i, row){
-        var category = dashboardCategoryToParam[row.label];
-        if (category) {
-            window.location.href = '/devices?category=' + encodeURIComponent(category);
+        ];
+        var dashboardDonut = Morris.Donut({
+            labelColor: kamPalette[0],
+            element: 'dashboard-donut-1',
+            data: donutData,
+            colors: kamPalette,
+            resize: true
+        });
+        dashboardDonut.on('click', function(i, row){
+            var category = dashboardCategoryToParam[row.label];
+            if (category) {
+                window.location.href = '/devices?category=' + encodeURIComponent(category);
+            }
+        });
+
+        var $legend = $('#dashboard-donut-1-legend');
+        if ($legend.length > 0) {
+            $.each(donutData, function(i, row){
+                if (!row.value) { return; }
+                var swatch = $('<span class="km-legend-swatch"></span>').css('background-color', kamPalette[i % kamPalette.length]);
+                var $item = $('<span class="km-legend-item"></span>').append(swatch).append(' ' + row.label + ' (' + row.value + ')');
+                $legend.append($item);
+            });
         }
-    });
+    }
     /* END Donut dashboard chart */
     /* Bar dashboard chart */
-    var dashboardBar = Morris.Bar({
-        element: 'dashboard-bar-1',
-        data: ports,
-        xkey: 'port',
-        ykeys: [ 'c'],
-        labels: ['Total results'],
-        barColors: ['#ff00cd', "#00E1FF", "#0064d7"],
-        gridTextSize: '10px',
-        gridTextColor: '#00E1FF',
-        xLabelMargin: 10,
-        xLabelAngle: 60,
-        hideHover: true,
-        resize: true,
-        gridLineColor: '#0064d7'
-    });
-    dashboardBar.on('click', function(i, row){
-        if (row && row.port) {
-            window.location.href = '/devices?port=' + encodeURIComponent(row.port);
-        }
-    });
+    if ($('#dashboard-bar-1').length > 0) {
+        var dashboardBar = Morris.Bar({
+            element: 'dashboard-bar-1',
+            data: ports,
+            xkey: 'port',
+            ykeys: [ 'c'],
+            labels: ['Total results'],
+            barColors: kamPalette,
+            gridTextSize: '10px',
+            gridTextColor: kamPalette[0],
+            xLabelMargin: 10,
+            xLabelAngle: 60,
+            hideHover: true,
+            resize: true,
+            gridLineColor: '#0064d7'
+        });
+        dashboardBar.on('click', function(i, row){
+            if (row && row.port) {
+                window.location.href = '/devices?port=' + encodeURIComponent(row.port);
+            }
+        });
+    }
     /* END Bar dashboard chart */
     
 //    /* Line dashboard chart */
@@ -125,6 +169,7 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
     var mapData = countries;
         var colorScale = ['#f0f0f0', '#C8EEFF', '#0071A4', '#FFA500', '#ff0000'];
 
+    if ($('#dashboard-map-seles').length > 0) {
     var jvm_wm = new jvm.WorldMap({container: $('#dashboard-map-seles'),
                                     map: 'world_mill_en',
                                     backgroundColor: '#0a141d',
@@ -155,7 +200,8 @@ function drawcharts(ics_len,coordinates_search_len, healthcare_len, ports, count
                                             normalizeFunction: 'polynomial',
                                             values: mapData}]
         },
-                                });    
+                                });
+    }
     /* END Vector Map */
 
     

@@ -125,7 +125,8 @@
     <!-- START SCRIPTS -->
         <!-- START PLUGINS -->
 <script async defer
-    src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&callback=myMap&libraries=places" type="text/javascript"></script>
+    src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&libraries=places" type="text/javascript"
+    onerror="window.kamMapLoadFailed = true;"></script>
          <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
 <script src="{% static 'js/markerclusterer.js' %}"></script>
 
@@ -144,13 +145,20 @@ $(document).ready(function() {
 var marker;
 var gm_map;
 var markerArray = [];
-{% for device in devices %}
+var infoWindow;
+function initialize() {
+    // Both of these need the Maps JS API (`google.maps`) to already be
+    // loaded, so they live inside initialize() -- which is only ever
+    // called once that's confirmed (see the kamMapLoadFailed guard below)
+    // -- rather than at top-level script scope where they used to run
+    // unconditionally (and throw if the API failed to load).
+    infoWindow = new google.maps.InfoWindow();
+    var mumbai = new google.maps.LatLng(20, 0);
+    {% for device in devices %}
     {% if forloop.first %}
-    var mumbai = new google.maps.LatLng({{ device.lat }},{{ device.lon }});
+    mumbai = new google.maps.LatLng({{ device.lat }},{{ device.lon }});
     {% endif %}
     {% endfor %}
-var infoWindow = new google.maps.InfoWindow();
-function initialize() {
     var marker, i;
     var clusterMarkers = [
               {% for device in devices %}
@@ -454,8 +462,21 @@ function initialize() {
         })(marker));
     }
 
-}$(document).ready(function() {
-
+}
+function kamShowMapLoadError(){
+    var el = document.getElementById('google_world_map');
+    if (el) {
+        el.innerHTML = '<div class="km-empty-state" style="height:100%;">Map unavailable &mdash; the Google Maps API key is missing or invalid.</div>';
+    }
+}
+$(document).ready(function() {
+    // Guard: if the Maps JS API failed to load (missing/invalid key,
+    // network error), `google` never gets defined -- don't let that throw
+    // and break the rest of the page, show a friendly placeholder instead.
+    if (window.kamMapLoadFailed || typeof google === 'undefined' || !google.maps) {
+        kamShowMapLoadError();
+        return;
+    }
     // INITIALIZE GOOGLE MAPS
     initialize();
 });
