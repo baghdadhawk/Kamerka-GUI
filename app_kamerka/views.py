@@ -316,6 +316,14 @@ def index(request):
             logger.info("index: failed to parse coordinates_search for search %s: %s", j.id, e)
 
     credits = check_credits()
+    # credits is a plain list from kamerka.tasks.check_credits(): index 0 is
+    # the Shodan query-credit count, index 1 is the BinaryEdge requests-left
+    # count, and either (or both) may simply be absent if that API call
+    # failed/is unconfigured -- rather than let the template silently render
+    # an empty tile, resolve each to an explicit value or None here (the
+    # template renders None as "n/a").
+    shodan_credits = credits[0] if len(credits) > 0 else None
+    binaryedge_credits = credits[1] if len(credits) > 1 else None
 
     context = {'device': all_devices,
                "search": last_5_searches,
@@ -327,7 +335,9 @@ def index(request):
                'vulns': sort,
                "task_id": task,
                "search_len": search_all,
-               "credits": credits}
+               "credits": credits,
+               "shodan_credits": shodan_credits,
+               "binaryedge_credits": binaryedge_credits}
     return render(request, 'index.html', context)
 
 
@@ -753,7 +763,8 @@ def device(request, id, device_id, ip):
                "honeypot_threshold": HONEYPOT_THRESHOLD,
                "is_likely_honeypot": all_devices.honeypot_score >= HONEYPOT_THRESHOLD,
                "other_sightings": sightings,
-               "sightings_count": sightings.count()}
+               "sightings_count": sightings.count(),
+               "status_choices": Device.STATUS_CHOICES}
 
     return render(request, 'device.html', context)
 

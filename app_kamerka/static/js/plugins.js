@@ -153,7 +153,11 @@ $(function() {
             if($(".datatable").length > 0){
                 $(".datatable").dataTable({
                     pageLength: 25,
-                    lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]]
+                    lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                    language: {
+                        emptyTable: "No data yet — results will appear here once a search has run.",
+                        zeroRecords: "No matching records for the current filters."
+                    }
                 });
                 $(".datatable").on('page.dt',function () {
                     onresize(100);

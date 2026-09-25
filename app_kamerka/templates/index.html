@@ -82,11 +82,12 @@
 
                 <!-- START BREADCRUMB -->
                 <ul class="breadcrumb">
-
-                           <div class='progress-wrapper'>
-                <div id='progress-bar' class='progress-bar' style="background-color: #0064d7; width: 0%;">&nbsp;</div>
+                {% if task_id %}
+                           <div class='progress-wrapper' id="task-progress-wrapper">
+                <div id='progress-bar' class='progress-bar' style="background-color: var(--km-accent); width: 0%;">&nbsp;</div>
                 </div>
-                <div id="progress-bar-message" style="color:#ff00cd">Starting...</div>
+                <div id="progress-bar-message" style="color:var(--km-accent)">Starting...</div>
+                {% endif %}
                 </ul>
                 <!-- END BREADCRUMB -->                       
                 
@@ -102,11 +103,11 @@
                                 <div class="owl-carousel" id="owl-example">
                                     <div>
                                         <div class="widget-title">Shodan credits</div>
-                                        <div class="widget-int"> {{ credits.0 }}</div>
+                                        <div class="widget-int">{% if shodan_credits != None %}{{ shodan_credits }}{% else %}<span class="km-na">n/a</span>{% endif %}</div>
                                     </div>
                                     <div>
                                         <div class="widget-title">BinaryEdge credits</div>
-                                        <div class="widget-int">{{ credits.1 }}</div>
+                                        <div class="widget-int">{% if binaryedge_credits != None %}{{ binaryedge_credits }}{% else %}<span class="km-na">n/a</span>{% endif %}</div>
                                     </div>
                                 </div>
                                 <div class="widget-controls">
@@ -174,7 +175,11 @@
 
                                     </div>
                                     <div class="panel-body padding-0" >
+                                        {% if ports %}
                                         <div class="chart-holder" id="dashboard-bar-1" style="height: 200px;background-color:#0a141d"></div>
+                                        {% else %}
+                                        <div class="km-empty-state" style="height: 200px;">No port data yet &mdash; run a search to populate this chart.</div>
+                                        {% endif %}
 
                                 </div>
 
@@ -193,7 +198,12 @@
 
                                 </div>
                                 <div class="panel-body padding-0">
-                                    <div class="chart-holder" id="dashboard-donut-1" style="height: 200px; background-color:#0a141d"></div>
+                                    {% if device.count %}
+                                    <div class="chart-holder" id="dashboard-donut-1" style="height: 160px; background-color:#0a141d"></div>
+                                    <div id="dashboard-donut-1-legend" class="km-chart-legend"></div>
+                                    {% else %}
+                                    <div class="km-empty-state" style="height: 200px;">No devices yet &mdash; run a search to populate this chart.</div>
+                                    {% endif %}
                                 </div>
                             </div>
 
@@ -211,6 +221,7 @@
                                 </div>
                                 <div class="panel-body panel-body-table" style="background-color:#0a141d">
 
+                                    {% if search %}
                                     <div class="table-responsive">
                                         <table class="table">
 
@@ -227,6 +238,9 @@
                                             </tbody>
                                         </table>
                                     </div>
+                                    {% else %}
+                                    <div class="km-empty-state">No searches yet &mdash; start one from the Search tab.</div>
+                                    {% endif %}
 
                                 </div>
                             </div>
@@ -247,7 +261,11 @@
                                 </div>
                                 <div class="panel-body" style="background-color:#0a141d">
 
+                                            {% if countries %}
                                             <div id="dashboard-map-seles" style="width: 100%; height: 200px;"></div>
+                                            {% else %}
+                                            <div class="km-empty-state" style="height: 200px;">No location data yet.</div>
+                                            {% endif %}
                                 </div>
                             </div>
 
@@ -264,7 +282,11 @@
 
                                 </div>
                                 <div class="panel-body padding-0">
-                                    <div id="wordcloud" class="chart-holder" id="dashboard-line-1" style="height:200px;overflow:hidden; background-color:#0a141d"></div>
+                                    {% if vulns %}
+                                    <div id="wordcloud" class="chart-holder" style="height:200px;overflow:hidden; background-color:#0a141d"></div>
+                                    {% else %}
+                                    <div class="km-empty-state" style="height: 200px;">No vulnerabilities recorded yet.</div>
+                                    {% endif %}
                                 </div>
                             </div>
 
@@ -313,9 +335,11 @@ function customProgress(progressBarElement, progressBarMessageElement, progress)
         {% endif %}
 </script>
 <script type="text/javascript">
+    {% if vulns %}
       d3v3.wordcloud()
         .size([400, 200])
         .selector('#wordcloud')
+        .fill(d3v3.scale.ordinal().range(kamChartPalette()))
         .onwordclick(function(d, i){
             if (d && d.text) {
                 window.location.href = '/devices?vuln=' + encodeURIComponent(d.text);
@@ -323,6 +347,7 @@ function customProgress(progressBarElement, progressBarMessageElement, progress)
         })
         .words([{% for vuln, link in vulns %} {text: "{{  vuln }}", size: "12"}, {% endfor %}])
         .start();
+    {% endif %}
     </script>
 
 

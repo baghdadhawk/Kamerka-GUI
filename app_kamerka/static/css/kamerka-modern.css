@@ -29,6 +29,17 @@
   --km-warning: #ffb020;
   --km-danger: #ff5050;
 
+  /* Restrained categorical chart palette (dashboard Morris bar/donut,
+     wordcloud) -- cyan primary + a few harmonious hues, no hot-magenta.
+     Read from JS via getComputedStyle so it tracks the active theme; see
+     index_charts.js kamChartPalette(). */
+  --km-chart-1: var(--km-accent);
+  --km-chart-2: var(--km-success);
+  --km-chart-3: var(--km-warning);
+  --km-chart-4: #7c93ff;
+  --km-chart-5: var(--km-accent-dim);
+  --km-chart-6: #4fe0b3;
+
   --km-radius-sm: 6px;
   --km-radius: 10px;
   --km-radius-lg: 14px;
@@ -61,6 +72,103 @@
     --km-surface: #141922;
     --km-surface-2: #1a212c;
   }
+}
+
+/* ==========================================================================
+   Light theme — explicit opt-in via the nav toggle (_nav.html), persisted
+   in localStorage as km-theme=light and applied as data-theme="light" on
+   <html> before first paint. Overrides only the design tokens above; every
+   rule in this file keeps working unchanged because they all read from the
+   custom properties rather than hardcoded colors (bar a handful of legacy
+   inline `background-color:#0a141d` chart-holder spots, neutralised via the
+   .chart-holder rule already in this file). Default stays dark.
+   ========================================================================== */
+:root[data-theme="light"] {
+  --km-bg: #f4f6f9;
+  --km-bg-elevated: #ffffff;
+  --km-surface: #ffffff;
+  --km-surface-2: #eef1f6;
+  --km-surface-3: #e4e9f0;
+  --km-border: #d6dce4;
+  --km-border-soft: #e1e6ec;
+
+  --km-text: #131a24;
+  --km-text-dim: #3c4757;
+  --km-text-muted: #67728a;
+
+  --km-accent: #0077a3;
+  --km-accent-dim: #005f82;
+  --km-accent-2: #b3008f;
+  --km-success: #157a58;
+  --km-warning: #966300;
+  --km-danger: #c62828;
+
+  --km-chart-1: var(--km-accent);
+  --km-chart-2: var(--km-success);
+  --km-chart-3: var(--km-warning);
+  --km-chart-4: #4a5fd6;
+  --km-chart-5: var(--km-accent-dim);
+  --km-chart-6: #0f9d78;
+
+  --km-shadow-sm: 0 1px 2px rgba(20, 30, 45, 0.08);
+  --km-shadow: 0 4px 16px rgba(20, 30, 45, 0.12);
+  --km-shadow-lg: 0 12px 40px rgba(20, 30, 45, 0.18);
+
+  color-scheme: light;
+}
+
+:root[data-theme="light"] ::selection {
+  background: var(--km-accent);
+  color: #ffffff;
+}
+
+:root[data-theme="light"] #app-nav {
+  background: linear-gradient(180deg, #ffffff 0%, #f4f6f9 100%);
+}
+
+:root[data-theme="light"] #app-nav ul li a.km-active {
+  color: #ffffff !important;
+}
+
+:root[data-theme="light"] .btn-primary,
+:root[data-theme="light"] .btn.btn-primary.active,
+:root[data-theme="light"] button.btn-primary {
+  color: #ffffff !important;
+}
+
+:root[data-theme="light"] .panel-heading,
+:root[data-theme="light"] .panel-title-box h3,
+:root[data-theme="light"] .panel-body[style*="background-color:#0a141d"],
+:root[data-theme="light"] .panel-body[style*="background-color: #0a141d"],
+:root[data-theme="light"] .chart-holder,
+:root[data-theme="light"] #google_world_map,
+:root[data-theme="light"] #dashboard-map-seles {
+  background: var(--km-surface) !important;
+}
+
+/* ==========================================================================
+   Theme toggle (_nav.html)
+   ========================================================================== */
+
+.km-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-left: var(--km-space-2);
+  border-radius: 50%;
+  border: 1px solid var(--km-border);
+  background: var(--km-surface-2);
+  color: var(--km-text-dim);
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.km-theme-toggle:hover {
+  border-color: var(--km-accent);
+  color: var(--km-accent);
 }
 
 * { box-sizing: border-box; }
@@ -845,3 +953,203 @@ details[open] summary { margin-bottom: var(--km-space-2); }
 }
 
 .km-guard-box .km-btn { margin-right: var(--km-space-2); margin-top: var(--km-space-3); }
+
+/* ==========================================================================
+   Empty states — dashboard panels, devices/results tables
+   ========================================================================== */
+
+.km-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--km-space-4);
+  color: var(--km-text-muted);
+  font-size: 0.85rem;
+  background: var(--km-surface) !important;
+}
+
+.km-na { color: var(--km-text-muted); font-weight: 400; font-size: 1rem; }
+
+table.datatable .dataTables_empty,
+.dataTables_wrapper .dataTables_empty {
+  padding: var(--km-space-5) !important;
+  color: var(--km-text-muted) !important;
+  text-align: center !important;
+  font-style: italic;
+}
+
+/* ==========================================================================
+   Dashboard donut legend (index_charts.js)
+   ========================================================================== */
+
+.km-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--km-space-3);
+  padding: var(--km-space-2) var(--km-space-3) var(--km-space-3);
+  font-size: 0.78rem;
+  color: var(--km-text-dim);
+}
+
+.km-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+
+.km-legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+/* ==========================================================================
+   AJAX feedback — loading buttons + toasts (actions.js, device.html)
+   ========================================================================== */
+
+.km-btn-loading,
+button.km-loading {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+.km-btn-loading::after,
+button.km-loading::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: km-spin 0.6s linear infinite;
+}
+
+@keyframes km-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ==========================================================================
+   Device page — summary header, triage status control, notes, sightings
+   ========================================================================== */
+
+.km-device-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--km-space-5);
+  background: var(--km-surface);
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  box-shadow: var(--km-shadow-sm);
+  padding: var(--km-space-4) var(--km-space-5);
+  margin-bottom: var(--km-space-5);
+}
+
+.km-device-summary h2 {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--km-text);
+}
+
+.km-device-summary-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--km-space-4);
+  flex: 1 1 auto;
+}
+
+.km-device-summary-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 90px;
+}
+
+.km-device-summary-field .km-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--km-text-muted);
+}
+
+.km-device-summary-field .km-value {
+  font-size: 0.95rem;
+  color: var(--km-text);
+  font-weight: 600;
+}
+
+.km-status-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.km-status-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--km-border);
+  background: var(--km-surface-2);
+  color: var(--km-text-dim);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.km-status-btn:hover { border-color: var(--km-accent); color: var(--km-accent); }
+
+.km-status-btn.km-status-active {
+  border-color: var(--km-accent);
+  background: rgba(0, 225, 255, 0.14);
+  color: var(--km-accent);
+}
+
+.km-status-btn.km-status-active[data-status="confirmed"] {
+  border-color: var(--km-danger);
+  background: rgba(255, 80, 80, 0.14);
+  color: #ff8787;
+}
+
+.km-status-btn.km-status-active[data-status="false_positive"] {
+  border-color: var(--km-text-muted);
+  background: rgba(124, 135, 152, 0.14);
+  color: var(--km-text-dim);
+}
+
+.km-notes-box textarea {
+  width: 100%;
+  min-height: 70px;
+  background: var(--km-bg-elevated);
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius-sm);
+  color: var(--km-text);
+  padding: var(--km-space-2) var(--km-space-3);
+  font-family: var(--km-font);
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+.km-sightings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.km-sightings-list li {
+  padding: var(--km-space-2) 0;
+  border-bottom: 1px solid var(--km-border-soft);
+  font-size: 0.85rem;
+}
+
+.km-sightings-list li:last-child { border-bottom: none; }
+
+.km-sightings-list a { font-weight: 600; }
