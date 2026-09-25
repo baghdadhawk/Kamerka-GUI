@@ -14,9 +14,9 @@ from django.http import HttpResponseRedirect
 from django.shortcuts import render
 
 from app_kamerka import forms
-from app_kamerka.models import Search, Device, DeviceNearby, FlickrNearby, ShodanScan, BinaryEdgeScore, Whois, \
-    TwitterNearby, Bosch
-from kamerka.tasks import shodan_search, devices_nearby, twitter_nearby_task, flickr, shodan_scan_task, \
+from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryEdgeScore, Whois, \
+    Bosch
+from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
     binary_edge_scan, whoisxml, check_credits, send_to_field_agent_task, nmap_scan, validate_nmap, validate_maxmind, scan, \
     exploit, build_family_selection, count_devices
 
@@ -476,7 +476,6 @@ def search_estimate(request):
 def device(request, id, device_id, ip):
     all_devices = Device.objects.get(search_id=id, id=device_id)
     nearby = DeviceNearby.objects.filter(device_id=all_devices.id)
-    flickr = FlickrNearby.objects.filter(device_id=all_devices.id)
     shodan = ShodanScan.objects.filter(device_id=all_devices.id)
     google_maps_key = keys['keys']['google_maps']
 
@@ -492,7 +491,6 @@ def device(request, id, device_id, ip):
 
     context = {'device': all_devices,
                'nearby': nearby,
-               'flickr': flickr,
                "shodan": shodan,
                'google_maps_key': google_maps_key,
                "passwd": info}
@@ -511,52 +509,6 @@ def nearby(request, id, query):
 
 def sources(request):
     return render(request, 'sources.html', {})
-
-
-def twitter_nearby(request, id):
-    if is_ajax(request) and request.method == 'GET':
-
-        tw = TwitterNearby.objects.filter(device_id=id)
-
-        if tw:
-            print('already')
-            return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
-
-        a = Device.objects.filter(id=id)
-        tw_task = twitter_nearby_task.delay(lat=a[0].lat, lon=a[0].lon, id=id)
-        return HttpResponse(json.dumps({'task_id': tw_task.id}), content_type='application/json')
-    else:
-        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
-
-
-def twitter_show(request, id):
-    if is_ajax(request) and request.method == 'GET':
-        a = TwitterNearby.objects.filter(device_id=id)
-
-        response_data = serializers.serialize('json', a)
-        if not response_data:
-            return HttpResponse(json.dumps({'Error': "No records"}), content_type='application/json')
-        else:
-            return HttpResponse(response_data, content_type="application/json")
-    else:
-        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
-
-
-def flickr_nearby(request, id):
-    if is_ajax(request) and request.method == 'GET':
-
-        fl = FlickrNearby.objects.filter(device_id=id)
-
-        if fl:
-            print('already')
-            return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
-
-        a = Device.objects.get(id=id)
-
-        flickr_task = flickr.delay(lat=a.lat, lon=a.lon, id=id)
-        return HttpResponse(json.dumps({'task_id': flickr_task.id}), content_type='application/json')
-    else:
-        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
 
 
 def shodan_scan(request, id):
@@ -634,28 +586,6 @@ def exploit_dev(request, id):
             return HttpResponse(json.dumps({'Error': "Connection Error"}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
-
-def get_flickr_results(request, id):
-    if is_ajax(request) and request.method == 'GET':
-        nearby_flickr = FlickrNearby.objects.filter(device_id=id)
-
-        response_data = serializers.serialize('json', nearby_flickr)
-
-        return HttpResponse(response_data, content_type="application/json")
-    else:
-        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
-
-
-def get_flickr_coordinates(request, id):
-    if is_ajax(request) and request.method == 'GET':
-        nearby_flickr = FlickrNearby.objects.filter(device_id=id)
-
-        response_data = serializers.serialize('json', nearby_flickr)
-
-        return HttpResponse(response_data, content_type="application/json")
-    else:
-        return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
-
 
 def get_nearby_devices_coordinates(request, id):
     if is_ajax(request) and request.method == 'GET':

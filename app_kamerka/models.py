@@ -45,22 +45,6 @@ class DeviceNearby(models.Model):
     org = models.CharField(max_length=100)
 
 
-class TwitterNearby(models.Model):
-    device = models.ForeignKey(Device, on_delete=models.CASCADE)
-    lat = models.CharField(max_length=100)
-    lon = models.CharField(max_length=100)
-    link = models.CharField(max_length=100)
-    tweet = models.CharField(max_length=100)
-
-
-class FlickrNearby(models.Model):
-    device = models.ForeignKey(Device, on_delete=models.CASCADE)
-    lat = models.CharField(max_length=100)
-    lon = models.CharField(max_length=100)
-    url = models.CharField(max_length=100)
-    title = models.CharField(max_length=100)
-
-
 class ShodanScan(models.Model):
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
     ports = models.CharField(max_length=100)

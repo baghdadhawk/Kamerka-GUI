@@ -19,14 +19,8 @@ urlpatterns = [
     path("<id>/update_coordinates/<coordinates>", views.update_coordinates, name='update_coordinates'),
     path('search_estimate', views.search_estimate, name='search_estimate'),
 
-    path("<id>/twitter/nearby", views.twitter_nearby, name='twitter_nearby'),
-    path("<id>/twitter/show", views.twitter_show, name='twitter_show'),
-
-    path("<id>/flickr/nearby", views.flickr_nearby, name='flickr_nearby'),
     path("<id>/shodan/scan", views.shodan_scan, name='shodan_scan'),
     path('get-task-info/', views.get_task_info, name="get_task_info"),
-    path('get_flickr_results/<id>', views.get_flickr_results, name="get_flickr_results"),
-    path('get_flickr_coordinates/<id>', views.get_flickr_coordinates, name="get_flickr_coordinates"),
     path('get_shodan_scan_results/<id>', views.get_shodan_scan_results, name="get_shodan_scan_results"),
     path('get_nearby_devices/<id>', views.get_nearby_devices, name="get_nearby_devices"),
 

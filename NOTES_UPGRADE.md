@@ -14,7 +14,7 @@
   mutually-compatible versions (see `requirements.txt`): `celery==5.3.6`,
   `redis==5.0.4`, `bs4==0.0.2`, `pynmea2==1.19.0`, `maxminddb==2.6.1`,
   `xmltodict==0.13.0`, `python-libnmap==0.7.3`, `lxml==5.2.1`,
-  `celery_progress==0.5`, `python-twitter==3.5`.
+  `celery_progress==0.5`.
 - `app_kamerka/urls.py`: the celery-progress include used
   `path(r'^celery-progress/', include(...))`, a regex string passed to
   `path()` (which expects a plain route, not a regex). Fixed to
@@ -31,19 +31,27 @@
 - Generated the initial migration: `app_kamerka/migrations/0001_initial.py`
   (see below).
 
+## Removed: Twitter and Flickr features
+
+The Twitter-nearby and Flickr-nearby features (previously flagged below as
+relying on the unmaintained `python-twitter==3.5` and `flickrapi==2.4.0`
+libraries) have since been removed entirely, rather than migrated to a
+replacement library such as `tweepy`. This included:
+
+- The `TwitterNearby` and `FlickrNearby` models (dropped via a follow-up
+  migration, `app_kamerka/migrations/0002_*.py`).
+- `kamerka/tasks.py`'s `twitter_nearby_task` and `flickr` Celery tasks, and
+  the `python-twitter`/`flickrapi` imports.
+- `app_kamerka/views.py`'s `twitter_nearby`, `twitter_show`,
+  `flickr_nearby`, `get_flickr_results` and `get_flickr_coordinates` views.
+- The corresponding URL patterns in `app_kamerka/urls.py`.
+- The Twitter/Flickr panels and AJAX handlers in
+  `app_kamerka/templates/device.html`.
+- `python-twitter==3.5` and `flickrapi==2.4.0` from `requirements.txt`, and
+  the `twitter_*`/`flickr_*` keys from `keys.json.example`.
+
 ## Unmaintained / stale libraries (kept, pinned to newest working release)
 
-- **python-twitter** (`python-twitter==3.5`): last released in 2018,
-  effectively unmaintained, and the Twitter/X API it targets (v1.1) has
-  since been heavily restricted/paywalled. It was left in place per scope
-  (don't rip out functionality that needs external API keys to test), but
-  if this project keeps using X/Twitter data going forward, consider
-  migrating to `tweepy` (actively maintained, supports X API v2) instead.
-- **flickrapi** (`flickrapi==2.4.0`, unchanged): last released in 2018.
-  Still imports and runs under Python 3.11 in this environment, so it was
-  left pinned as-is; no drop-in actively-maintained replacement was
-  substituted since that would require re-testing the Flickr integration
-  against a real API key.
 - **pybinaryedge** (`pybinaryedge==0.5`, unchanged) and **shodan**
   (`shodan==1.19.0`, unchanged): both small, low-churn API client wrappers;
   left pinned to the versions already in use.
@@ -75,8 +83,8 @@
 
 ## Still needs manual/real-environment verification
 
-- Nothing in this sandbox has real Shodan/BinaryEdge/Flickr/Twitter/WHOIS
-  API credentials or a running Celery worker + Redis broker, so the actual
+- Nothing in this sandbox has real Shodan/BinaryEdge/WHOIS API credentials
+  or a running Celery worker + Redis broker, so the actual
   task bodies in `kamerka/tasks.py` (network calls, Celery task execution)
   were not exercised end-to-end — only that the module imports cleanly and
   the views that dispatch tasks return sane HTTP responses when Celery/

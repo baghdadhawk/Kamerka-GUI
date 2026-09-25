@@ -94,22 +94,6 @@ class AjaxViewBadRequestTests(TestCase):
         response = self.client.get(reverse('get_whois', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
 
-    def test_twitter_show_non_ajax_is_400(self):
-        response = self.client.get(reverse('twitter_show', args=[self.device.id]))
-        self.assertEqual(response.status_code, 400)
-
-    def test_twitter_show_ajax_is_200(self):
-        response = self.client.get(reverse('twitter_show', args=[self.device.id]), **AJAX_HEADER)
-        self.assertEqual(response.status_code, 200)
-
-    def test_get_flickr_results_non_ajax_is_400(self):
-        response = self.client.get(reverse('get_flickr_results', args=[self.device.id]))
-        self.assertEqual(response.status_code, 400)
-
-    def test_get_flickr_results_ajax_is_200(self):
-        response = self.client.get(reverse('get_flickr_results', args=[self.device.id]), **AJAX_HEADER)
-        self.assertEqual(response.status_code, 200)
-
 
 class ShodanScanResultsTests(TestCase):
     """get_shodan_scan_results used to raise IndexError (=> 500) when there

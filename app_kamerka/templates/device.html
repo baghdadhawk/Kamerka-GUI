@@ -178,35 +178,6 @@
                                 </div>
                             </div>
 
-                                                                                <div class="panel panel-default">
-                                <div class="panel-heading ui-draggable-handle">
-                                    <h3 class="panel-title">Tweets</h3>
-                                </div>
-                                <div class="panel-body">
-                                    <button type="button" id="nearby_twitter" class="btn btn-primary active" >Scan</button></a>
-
-                                    <button type="button" id="twitter_show" class="btn btn-primary active">Show</button></a>
-
-                                                                        <button type="button" id="markers_twitter" class="btn btn-primary active">Add</button>
-
-                        <div id="twitter_results"></div>
-                                </div>
-                            </div>
-                                        <div class="panel panel-default">
-                                <div class="panel-heading ui-draggable-handle">
-                                    <h3 class="panel-title">Flickr photos</h3>
-                                </div>
-                                <div class="panel-body">
-                                    <button type="button" id="nearby_flickr" class="btn btn-primary active">Scan</button></a>
-                                                                        <button type="button" id="flickr_show" class="btn btn-primary active">Show</button></a>
-
-                                                                        <button type="button" id="markers_flickr" class="btn btn-primary active">Add</button>
-
-                                    <div id="results"></div>
-
-
-                                </div>
-                            </div>
                                 </div>
 
 
@@ -674,34 +645,6 @@ library.json = {
     });;
 
 </script>
-                <script>
-                    var marker;
-            $('#markers_flickr').on('click', function(){
-        $.ajax({
-            url: "/get_flickr_coordinates/{{device.id}}",
-            type: "get",
-            success: function(response) {
-
-            $.each(response, function(key, val) {
-            var infowindow = new google.maps.InfoWindow({
-            content: "<div style=width:600px; height:640px><img src="+val.fields.url+" width='600px' height='640'></div>",
-  });
-            var marker = new google.maps.Marker({
-            map: map,
-            icon: "{% static 'images/flickr.png' %}",
-            title: 'Coordinates',
-            position: new google.maps.LatLng(val.fields.lat , val.fields.lon )
-
-  })
-marker.addListener('click', function() {
-    infowindow.open(map, marker);
-  });
-            })
-            }
-        })
-  });
-</script>
-
         <script>
 var marker;
             $('#add_nearby_devices').on('click', function(){
@@ -729,30 +672,6 @@ marker.addListener('click', function() {
         })
   });
         </script>
-<script>
-
-
-    var pgrbar4 = $('#progress-bar4');
-
-    $('#nearby_twitter').on('click', function(){
-        $.ajax({
-        type: "GET",
-        url: "/{{device.id}}/twitter/nearby",
-        success: function (data) {
-                if (data.task_id != null) {
-                    get_task_info(data.task_id,pgrbar4);
-                }
-                else if (data.Error){
-                noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 1000});
-                }
-            },
-            error: function (data) {
-                console.log("Something went wrong!");
-            }
-        });
-        return false;
-    });</script>
-
             <script type="text/javascript">
     var pgrbar2 = $('#progress-bar2');
     $('#shodan_scan').on('click', function(){
@@ -978,24 +897,6 @@ $('#binaryedge_show').on('click', function() {
 
 var frm = $('#generate-user-form');
     var pgrbar = $('#progress-bar');
-    $('#nearby_flickr').on('click', function(){
-        $.ajax({
-        type: "GET",
-        url: "/{{device.id}}/flickr/nearby",
-        success: function (data) {
-                if (data.task_id != null) {
-                    get_task_info(data.task_id,pgrbar);
-                }
-                else if (data.Error){
-                noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 1000});
-                }
-            },
-            error: function (data) {
-                console.log("Something went wrong!");
-            }
-        });
-        return false;
-    });
 
 function get_task_info(task_id,pgrbar) {
         $.ajax({
@@ -1027,38 +928,6 @@ function get_task_info(task_id,pgrbar) {
         });
     }
 
-$('#twitter_show').on('click', function(){
-var x = document.getElementById("twitter_results");
-if (x.style.display === "none") {
-    x.style.display = "block";
-  } else {
-    x.style.display = "none";
-  } if(x.innerHTML == ""){
-        $.ajax({
-            url: "/{{device.id}}/twitter/show",
-            type: "get",
-            success: function(response) {
-            if (response.length==0) {
-                            noty({text: "No records" , layout: 'topRight', type: 'error', timeout: 1000});
-}
-            else {
-            $.each(response, function(key, val) {
-              $.each(val.fields, function(fieldname, field) {
-                 // response is form in html format
-                 if (fieldname=="device"){ {} }
-                 else {
-                 $("#twitter_results").append("<p><b>" + fieldname + ' </b><br> ' + field + " </p>");
-}
-            }  );$("#twitter_results").append('------------------');
-
-              }
-              )
-            }}
-        })
-        }
-  });
-
-
 $('#bosch_show').on('click', function(){
 var x = document.getElementById("bosch_results");
 if (x.style.display === "none") {
@@ -1078,33 +947,6 @@ if (x.style.display === "none") {
                  $("#bosch_results").append("<p><b>" + fieldname + ' </b><br> ' + field + " </p>");
 }
             }  );$("#bosch_results").append('------------------');
-
-              }
-              )
-            }
-        })
-        }
-  });
-
-$('#flickr_show').on('click', function(){
-var x = document.getElementById("results");
-if (x.style.display === "none") {
-    x.style.display = "block";
-  } else {
-    x.style.display = "none";
-  } if(x.innerHTML == ""){
-        $.ajax({
-            url: "/get_flickr_results/{{device.id}}",
-            type: "get",
-            success: function(response) {
-            $.each(response, function(key, val) {
-              $.each(val.fields, function(fieldname, field) {
-                 // response is form in html format
-                 if (fieldname=="device"){ {} }
-                 else {
-                 $("#results").append("<p><b>" + fieldname + ' </b><br> ' + field + " </p>");
-}
-            }  );$("#results").append('------------------');
 
               }
               )
