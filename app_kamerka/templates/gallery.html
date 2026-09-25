@@ -17,18 +17,6 @@
         <!-- EOF CSS INCLUDE -->
     </head>
 
-
-
-<style>
-
-.screenshot {
-
-    max-width: 100%;
-    max-height: 100%;
-    display: block
-
-}
-</style>
     <body>
         {% include '_nav.html' %}
         <!-- START PAGE CONTAINER -->
@@ -102,30 +90,23 @@
 
                                 </div>
                                 <div class="panel-body">
-                                                {% for device in devices %}
-
-<div class="col-md-4">
-
-                            <div class="panel panel-default">
-                                <div class="panel-heading">
-                                    <div class="panel-title-box">
-                                        <h3><a href="{% url 'device' id=device.search_id ip=device.ip device_id=device.id %}"> {{ device.ip }}</a></h3>
+                                    {% if devices %}
+                                    <div class="km-gallery-grid">
+                                        {% for device in devices %}
+                                        <div class="km-gallery-card">
+                                            <div class="km-gallery-card-head">
+                                                <a href="{% url 'device' id=device.search_id ip=device.ip device_id=device.id %}">{{ device.ip }}</a>
+                                            </div>
+                                            <a href="{% url 'device' id=device.search_id ip=device.ip device_id=device.id %}" class="km-gallery-shot">
+                                                <img src="data:image/jpeg;base64,{{ device.screenshot }}" class="screenshot">
+                                            </a>
+                                        </div>
+                                        {% endfor %}
                                     </div>
-
+                                    {% else %}
+                                    <div class="km-empty-state">No screenshots captured yet.</div>
+                                    {% endif %}
                                 </div>
-                                <div class="panel-body padding-0" style="background-color:#0a141d">
-
-                                    <a href="{% url 'device' id=device.search_id ip=device.ip device_id=device.id %}"><img src="data:image/jpeg;base64,{{ device.screenshot }}" class="screenshot"></a>
-
-
-                                </div>
-                            </div>
-
-                        </div>
-                                                                                {% endfor %}
-
-
-                        </div>
 
 
 

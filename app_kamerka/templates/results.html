@@ -158,7 +158,7 @@
 
                                                 </tr>
                                             </thead>
-                                            <tbody style="color: #0064d7;">
+                                            <tbody>
 
                                                 {% for device in search %}
                                                 {% if device.located or device.exploited_scanned %}
@@ -180,7 +180,7 @@
                                                     <td>{% if device.located %}<span class="km-icon-yes">&#10003;</span>{% else %}<span class="km-icon-no">&#10007;</span>{% endif %}</td>
                                                    <td>{% if device.exploited_scanned %}<span class="km-icon-yes">&#10003;</span>{% else %}<span class="km-icon-no">&#10007;</span>{% endif %}</td>
                                                    {% if device.honeypot_score >= 50 %}
-                                                   <td data-order="{{ device.honeypot_score }}"><span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:2px 6px; border-radius:3px;">&#9888; honeypot ({{ device.honeypot_score }})</span></td>
+                                                   <td data-order="{{ device.honeypot_score }}"><span class="km-badge km-badge-danger">&#9888; honeypot ({{ device.honeypot_score }})</span></td>
                                                    {% else %}
                                                    <td data-order="{{ device.honeypot_score }}"></td>
                                                    {% endif %}

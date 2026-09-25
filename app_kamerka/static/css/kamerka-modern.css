@@ -653,6 +653,9 @@ table.datatable thead th {
   letter-spacing: 0.03em;
   padding: var(--km-space-2) var(--km-space-3);
   white-space: nowrap;
+  position: sticky;
+  top: var(--km-nav-height);
+  z-index: 5;
 }
 
 table.table > tbody > tr > td,
@@ -880,6 +883,21 @@ button.btn-primary {
 .image-upload-wrap {
   background: var(--km-surface-2);
   border-radius: var(--km-radius);
+  border: 4px dashed var(--km-accent-2) !important;
+}
+
+.image-dropping,
+.image-upload-wrap:hover {
+  background-color: rgba(0, 225, 255, 0.1) !important;
+  border-color: var(--km-accent-2) !important;
+}
+
+.image-title-wrap { color: var(--km-text) !important; }
+
+.drag-text h3 { color: var(--km-accent) !important; }
+
+.km-search-heading {
+  color: var(--km-accent) !important;
 }
 
 /* ==========================================================================
@@ -893,6 +911,11 @@ pre, pre code {
   border: 1px solid var(--km-border) !important;
   border-radius: var(--km-radius);
   color: var(--km-text-dim);
+}
+
+pre {
+  padding: var(--km-space-3) var(--km-space-4);
+  margin: var(--km-space-3) 0;
 }
 
 details summary {
@@ -909,8 +932,69 @@ details[open] summary { margin-bottom: var(--km-space-2); }
    ========================================================================== */
 
 .screenshot {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
   border-radius: var(--km-radius-sm);
   border: 1px solid var(--km-border);
+}
+
+.km-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--km-space-4);
+}
+
+.km-gallery-card {
+  background: var(--km-surface-2);
+  border: 1px solid var(--km-border);
+  border-radius: var(--km-radius);
+  overflow: hidden;
+}
+
+.km-gallery-card-head {
+  padding: var(--km-space-2) var(--km-space-3);
+  border-bottom: 1px solid var(--km-border-soft);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.km-gallery-card-head a { color: var(--km-text); }
+.km-gallery-card-head a:hover { color: var(--km-accent); }
+
+.km-gallery-shot,
+.km-gallery-shot.km-gallery-shot {
+  display: block;
+  background: var(--km-bg-elevated);
+  line-height: 0;
+}
+
+.km-gallery-shot .screenshot { border: none; border-radius: 0; }
+
+/* ==========================================================================
+   Sources page
+   ========================================================================== */
+
+.km-sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--km-space-3);
+}
+
+.km-source-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--km-space-2);
+  padding: var(--km-space-2) var(--km-space-3);
+  border-radius: var(--km-radius-sm);
+  border: 1px solid var(--km-border-soft);
+  background: var(--km-surface-2);
+}
+
+.km-source-name {
+  font-weight: 600;
+  color: var(--km-text);
 }
 
 /* ==========================================================================
@@ -1413,6 +1497,63 @@ button.km-loading::after {
   color: var(--km-accent-2);
   text-align: center;
   font-weight: 700;
+}
+
+/* ==========================================================================
+   Device page — JSON pretty-print colors (device.html's inline <style>
+   block used to hardcode these; library.json.prettyPrint() in device.html
+   still emits the same .json-key/.json-value/.json-string span classes,
+   just themed from tokens now), banner-warning text, and the Stage 4
+   two-column Intel/enrichment layout.
+   ========================================================================== */
+.json-key { color: var(--km-accent); }
+.json-value,
+.json-string { color: var(--km-accent-2); }
+
+.km-alert-text {
+  color: var(--km-danger);
+  font-weight: 700;
+}
+
+.km-device-grid {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  align-items: start;
+  gap: var(--km-space-5);
+}
+
+@media (max-width: 960px) {
+  .km-device-grid { grid-template-columns: 1fr; }
+}
+
+.km-device-grid-primary,
+.km-device-grid-secondary {
+  display: flex;
+  flex-direction: column;
+}
+
+.km-device-grid-primary > .panel:last-child,
+.km-device-grid-secondary > .panel:last-child { margin-bottom: 0; }
+
+.km-intel-body {
+  text-align: left;
+}
+
+.km-intel-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--km-space-3);
+}
+
+.km-intel-fields b { font-weight: 600; color: var(--km-text); }
+
+.km-screenshot-wrap { margin-top: var(--km-space-3); }
+
+.km-screenshot-wrap img {
+  max-width: 100%;
+  border-radius: var(--km-radius-sm);
+  border: 1px solid var(--km-border);
 }
 
 /* ==========================================================================

@@ -89,6 +89,7 @@
 
                                 </div>
                                 <div class="panel-body">
+                                    {% if history %}
                                     <table id="customers2" class="table datatable">
                                         <thead>
                                             <tr>
@@ -112,6 +113,9 @@
 
                                         </tbody>
                                     </table>
+                                    {% else %}
+                                    <div class="km-empty-state">No searches yet &mdash; run one from the Search page.</div>
+                                    {% endif %}
 </div>
 
 
