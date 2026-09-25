@@ -16,6 +16,7 @@
         <!-- EOF CSS INCLUDE -->
     </head>
     <body>
+        {% include '_nav.html' %}
         <!-- START PAGE CONTAINER -->
         <div class="page-container">
 
@@ -97,6 +98,17 @@
                                 <div class="panel-heading">
                                     <h3 class="panel-title">Devices</h3>
 
+                                    {% if filters %}
+                                    <div id="active-filters">
+                                        <strong>Active filters:</strong>
+                                        <ul>
+                                            {% for key, value in filters.items %}
+                                            <li>{{ key }}: {{ value }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                        <a href="{% url 'devices' %}">Clear filters</a>
+                                    </div>
+                                    {% endif %}
 
                                 </div>
                                 <div class="panel-body">

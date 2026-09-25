@@ -35,6 +35,7 @@
 
 </style>
     <body>
+        {% include '_nav.html' %}
         <!-- START PAGE CONTAINER -->
         <div class="page-container">
 
@@ -194,7 +195,27 @@
                                         {{ device.org }}<br>
                                         {{ device.vulns|slice:"1:-1" }}<br>
                                             {{ device.city }}</b><br><br>
-                                     {{ device.data }}<br>
+
+                                    {% if banner_warning %}
+                                    <p style="color:#ff5050; font-weight:bold;">Warning: this banner looks like a generic/HTTP-error response, not device-specific data &mdash; the classification may be a false positive.</p>
+                                    {% endif %}
+
+                                    <div>
+                                        <strong>Indicators:</strong>
+                                        {% if indicators %}
+                                        <ul style="list-style:none; padding:0; margin:0;">
+                                            {% for a in indicators %}<li>{{ a }}</li>{% endfor %}
+                                        </ul>
+                                        {% else %}
+                                        <span style="opacity:0.6;"> no indicators</span>
+                                        {% endif %}
+                                    </div>
+
+                                    <details>
+                                        <summary>Raw banner</summary>
+                                        <pre style="text-align:left; white-space:pre-wrap; word-break:break-word;">{{ device.data }}</pre>
+                                    </details>
+
                                         {{ device.ssl }}
                                                                                     <td>{{ device.category }}</td><br>
 

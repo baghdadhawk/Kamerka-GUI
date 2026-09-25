@@ -1,0 +1,13 @@
+{% load static %}
+<nav id="app-nav">
+    <ul>
+        <li><a href="{% url 'search_main' %}">Search</a></li>
+        <li><a href="{% url 'index' %}">Dashboard</a></li>
+        <li><a href="{% url 'devices' %}">Devices</a></li>
+        <li><a href="{% url 'history' %}">History</a></li>
+        <li><a href="{% url 'map' %}">Map</a></li>
+        <li><a href="{% url 'gallery' %}">Gallery</a></li>
+        <li><a href="{% url 'sources' %}">Sources</a></li>
+        <li><a href="/admin/logout/">Log out</a></li>
+    </ul>
+</nav>

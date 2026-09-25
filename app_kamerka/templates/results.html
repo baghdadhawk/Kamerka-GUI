@@ -18,6 +18,7 @@
         <!-- EOF CSS INCLUDE -->
     </head>
     <body>
+        {% include '_nav.html' %}
         <!-- START PAGE CONTAINER -->
         <div class="page-container">
 
@@ -663,6 +664,11 @@ function initialize() {
      d3v3.wordcloud()
         .size([500, 300])
         .selector('#wordcloud')
+        .onwordclick(function(d, i){
+            if (d && d.text) {
+                window.location.href = '/devices?vuln=' + encodeURIComponent(d.text) + '&search_id={{ search_id }}';
+            }
+        })
         .words([{% for vuln, link in vulns %} {text: "{{  vuln }}", size: "15"}, {% endfor %}])
         .start();
     </script>
@@ -691,7 +697,7 @@ function initialize() {
 
         <script type="text/javascript" src="{% static 'js/actions.js' %}"></script>
         <script type="text/javascript" src="{% static 'js/draw_charts_results.js' %}"></script>
-                <script>drawCharts({{ports|safe}}, {{city|safe}},{{category|safe}});</script>
+                <script>drawCharts({{ports|safe}}, {{city|safe}},{{category|safe}}, "{{ search_id }}");</script>
 
         <!-- END TEMPLATE -->
 

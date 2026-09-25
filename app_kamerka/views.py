@@ -19,6 +19,7 @@ from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryE
 from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
     binary_edge_scan, whoisxml, check_credits, send_to_field_agent_task, nmap_scan, validate_nmap, validate_maxmind, scan, \
     exploit, build_family_selection, count_devices
+from app_kamerka.banner_utils import looks_like_generic_http_response
 
 
 # Create your views here.
@@ -324,7 +325,57 @@ def index(request):
 
 
 def devices(request):
+    """List devices, optionally filtered by GET params so infographics
+    (ports/type/category/country/vuln charts) and the history/search pages
+    can link straight into a filtered device list.
+
+    Supported params (all optional, combined with AND; unknown/empty
+    params are ignored):
+      - port: exact match on Device.port
+      - type: exact match on Device.type (device family)
+      - category: exact match on Device.category (ics/healthcare/infra/coordinates)
+      - country: match on Device.country_code (case-insensitive)
+      - search_id: restrict to a single Search's devices
+      - vuln: substring match against the stored vulns (a CVE id)
+      - honeypot: reserved for future use; ignored since there is no
+        corresponding model field yet.
+    """
     all_devices = Device.objects.all()
+
+    filters = {}
+
+    port = request.GET.get('port')
+    if port:
+        all_devices = all_devices.filter(port=port)
+        filters['port'] = port
+
+    device_type = request.GET.get('type')
+    if device_type:
+        all_devices = all_devices.filter(type=device_type)
+        filters['type'] = device_type
+
+    category = request.GET.get('category')
+    if category:
+        all_devices = all_devices.filter(category=category)
+        filters['category'] = category
+
+    country = request.GET.get('country')
+    if country:
+        all_devices = all_devices.filter(country_code__iexact=country)
+        filters['country'] = country
+
+    search_id = request.GET.get('search_id')
+    if search_id:
+        all_devices = all_devices.filter(search_id=search_id)
+        filters['search_id'] = search_id
+
+    vuln = request.GET.get('vuln')
+    if vuln:
+        all_devices = all_devices.filter(vulns__icontains=vuln)
+        filters['vuln'] = vuln
+
+    # 'honeypot' is reserved for a future field; there is nothing to filter
+    # on yet, so it is accepted but has no effect.
 
     for i in all_devices:
         try:
@@ -332,7 +383,7 @@ def devices(request):
         except:
             pass
 
-    context = {"devices": all_devices}
+    context = {"devices": all_devices, "filters": filters}
 
     return render(request, "devices.html", context=context)
 
@@ -399,7 +450,8 @@ def results(request, id):
                "vulns": sort,
                "category": categories_list,
                "city": cities_list,
-               'google_maps_key': google_maps_key}
+               'google_maps_key': google_maps_key,
+               'search_id': id}
 
     return render(request, 'results.html', context)
 
@@ -480,9 +532,22 @@ def device(request, id, device_id, ip):
     google_maps_key = keys['keys']['google_maps']
 
     try:
-        all_devices.indicator = ast.literal_eval(all_devices.indicator)
-    except:
-        pass
+        parsed_indicator = ast.literal_eval(all_devices.indicator)
+    except Exception:
+        parsed_indicator = all_devices.indicator
+
+    if isinstance(parsed_indicator, (list, tuple, set)):
+        indicator_list = list(parsed_indicator)
+    elif parsed_indicator:
+        indicator_list = [parsed_indicator]
+    else:
+        indicator_list = []
+
+    all_devices.indicator = indicator_list
+
+    # Only keep truthy/non-blank entries so an empty or all-blank indicator
+    # list renders as "no indicators" instead of empty bullet noise.
+    meaningful_indicators = [i for i in indicator_list if i]
 
     if all_devices.type in passwds.keys():
         info = passwds[all_devices.type]
@@ -493,7 +558,9 @@ def device(request, id, device_id, ip):
                'nearby': nearby,
                "shodan": shodan,
                'google_maps_key': google_maps_key,
-               "passwd": info}
+               "passwd": info,
+               "indicators": meaningful_indicators,
+               "banner_warning": looks_like_generic_http_response(all_devices.data)}
 
     return render(request, 'device.html', context)
 

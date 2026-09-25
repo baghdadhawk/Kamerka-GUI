@@ -150,8 +150,11 @@ $(function() {
 
         //Datatables
         var uiDatatable = function(){
-            if($(".datatable").length > 0){                
-                $(".datatable").dataTable();
+            if($(".datatable").length > 0){
+                $(".datatable").dataTable({
+                    pageLength: 25,
+                    lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]]
+                });
                 $(".datatable").on('page.dt',function () {
                     onresize(100);
                 });

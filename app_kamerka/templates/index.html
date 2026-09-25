@@ -18,6 +18,7 @@
         <!-- EOF CSS INCLUDE -->
     </head>
     <body>
+        {% include '_nav.html' %}
         <!-- START PAGE CONTAINER -->
         <div class="page-container">
             
@@ -314,6 +315,11 @@ function customProgress(progressBarElement, progressBarMessageElement, progress)
       d3v3.wordcloud()
         .size([400, 200])
         .selector('#wordcloud')
+        .onwordclick(function(d, i){
+            if (d && d.text) {
+                window.location.href = '/devices?vuln=' + encodeURIComponent(d.text);
+            }
+        })
         .words([{% for vuln, link in vulns %} {text: "{{  vuln }}", size: "12"}, {% endfor %}])
         .start();
     </script>

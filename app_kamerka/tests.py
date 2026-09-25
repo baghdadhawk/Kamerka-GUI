@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, Client
 from django.urls import reverse
 
+from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.models import Device, Search
 from app_kamerka.views import is_ajax
 from kamerka import tasks
@@ -200,3 +201,218 @@ class ModelSmokeTests(TestCase):
         self.assertEqual(device.search_id, search.id)
         self.assertEqual(Device.objects.filter(search=search).count(), 1)
         self.assertEqual(Device.objects.get(id=device.id).ip, '10.0.0.1')
+
+
+class DevicesViewFilterTests(TestCase):
+    """The `devices` view supports server-side GET filtering so dashboard
+    and per-search infographics can link into a filtered device list."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.client.force_login(self.user)
+
+        self.search1 = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.search2 = Search.objects.create(country='DE', ics='bacnet', coordinates='', coordinates_search='')
+
+        self.modbus_us = Device.objects.create(
+            search=self.search1, ip='10.0.0.1', type='modbus', category='ics',
+            port='502', country_code='US', vulns="['CVE-2020-1111']",
+        )
+        self.bacnet_de = Device.objects.create(
+            search=self.search2, ip='10.0.0.2', type='bacnet', category='ics',
+            port='47808', country_code='DE', vulns="['CVE-2019-2222']",
+        )
+        self.webcam_us = Device.objects.create(
+            search=self.search1, ip='10.0.0.3', type='webcam', category='coordinates',
+            port='80', country_code='US', vulns='',
+        )
+
+    def test_no_filters_returns_all(self):
+        response = self.client.get(reverse('devices'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.context['devices']), {self.modbus_us, self.bacnet_de, self.webcam_us})
+        self.assertEqual(response.context['filters'], {})
+
+    def test_filter_by_port(self):
+        response = self.client.get(reverse('devices'), {'port': '502'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['devices']), [self.modbus_us])
+
+    def test_filter_by_type(self):
+        response = self.client.get(reverse('devices'), {'type': 'modbus'})
+        self.assertEqual(list(response.context['devices']), [self.modbus_us])
+
+    def test_filter_by_category(self):
+        response = self.client.get(reverse('devices'), {'category': 'coordinates'})
+        self.assertEqual(list(response.context['devices']), [self.webcam_us])
+
+    def test_filter_by_country(self):
+        response = self.client.get(reverse('devices'), {'country': 'US'})
+        self.assertEqual(set(response.context['devices']), {self.modbus_us, self.webcam_us})
+
+    def test_filter_by_country_case_insensitive(self):
+        response = self.client.get(reverse('devices'), {'country': 'us'})
+        self.assertEqual(set(response.context['devices']), {self.modbus_us, self.webcam_us})
+
+    def test_filter_by_search_id(self):
+        response = self.client.get(reverse('devices'), {'search_id': self.search2.id})
+        self.assertEqual(list(response.context['devices']), [self.bacnet_de])
+
+    def test_filter_by_vuln(self):
+        response = self.client.get(reverse('devices'), {'vuln': 'CVE-2020-1111'})
+        self.assertEqual(list(response.context['devices']), [self.modbus_us])
+
+    def test_combined_filters(self):
+        response = self.client.get(reverse('devices'), {'country': 'US', 'category': 'ics'})
+        self.assertEqual(list(response.context['devices']), [self.modbus_us])
+
+    def test_empty_params_return_all(self):
+        response = self.client.get(reverse('devices'), {'port': '', 'type': ''})
+        self.assertEqual(response.context['devices'].count(), 3)
+
+    def test_unknown_param_is_ignored(self):
+        response = self.client.get(reverse('devices'), {'honeypot': 'yes'})
+        self.assertEqual(response.context['devices'].count(), 3)
+
+    def test_no_matches_returns_empty_queryset(self):
+        response = self.client.get(reverse('devices'), {'port': '9999'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['devices'].count(), 0)
+
+    def test_active_filters_shown_on_page(self):
+        response = self.client.get(reverse('devices'), {'port': '502'})
+        self.assertContains(response, 'port')
+        self.assertContains(response, '502')
+        self.assertContains(response, 'Clear filters')
+
+
+class BannerUtilsTests(TestCase):
+    """looks_like_generic_http_response() flags Shodan banners that are
+    really just a generic web-server error page, not device intelligence."""
+
+    def test_html_error_page_is_flagged(self):
+        banner = (
+            "HTTP/1.1 400 Bad Request\r\n"
+            "Server: nginx\r\n\r\n"
+            "<html>\r\n<head><title>400 Bad Request</title></head>\r\n"
+            "<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n"
+            "<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+        )
+        self.assertTrue(looks_like_generic_http_response(banner))
+
+    def test_status_line_alone_is_flagged(self):
+        banner = "HTTP/1.1 502 Bad Gateway\r\nServer: nginx\r\n\r\n"
+        self.assertTrue(looks_like_generic_http_response(banner))
+
+    def test_normal_ics_banner_is_not_flagged(self):
+        banner = (
+            "Modbus TCP\r\nUnit ID: 1\r\nFunction: Read Holding Registers\r\n"
+            "Device: Schneider Electric PLC\r\n"
+        )
+        self.assertFalse(looks_like_generic_http_response(banner))
+
+    def test_normal_http_200_banner_is_not_flagged(self):
+        banner = (
+            "HTTP/1.1 200 OK\r\nServer: Boa/0.94.14rc21\r\n\r\n"
+            "<html><body><h1>Camera Login</h1></body></html>"
+        )
+        self.assertFalse(looks_like_generic_http_response(banner))
+
+    def test_empty_banner_is_not_flagged(self):
+        self.assertFalse(looks_like_generic_http_response(''))
+        self.assertFalse(looks_like_generic_http_response(None))
+
+
+class DevicePageIntelTests(TestCase):
+    """The device page surfaces the raw banner in a collapsed <pre>, only
+    shows indicators when there are meaningful ones, and warns when the
+    banner looks like a generic HTTP error response."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.client.force_login(self.user)
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+
+    def _device_url(self, device):
+        return reverse('device', args=[device.search_id, device.id, device.ip])
+
+    def test_error_banner_shows_warning_and_collapsed_raw_banner(self):
+        device = Device.objects.create(
+            search=self.search, ip='1.2.3.4', type='webcam', category='coordinates',
+            data='<html><body>400 Bad Request</body></html>', indicator='',
+        )
+        response = self.client.get(self._device_url(device))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'looks like a generic/HTTP-error response')
+        self.assertContains(response, '<summary>Raw banner</summary>')
+        self.assertContains(response, 'no indicators')
+
+    def test_normal_banner_no_warning(self):
+        device = Device.objects.create(
+            search=self.search, ip='1.2.3.5', type='modbus', category='ics',
+            data='Modbus TCP device banner', indicator="['default creds']",
+        )
+        response = self.client.get(self._device_url(device))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'looks like a generic/HTTP-error response')
+        self.assertContains(response, 'default creds')
+
+
+class PageSmokeTests(TestCase):
+    """Load-test the key pages as a logged-in user."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.client.force_login(self.user)
+
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(
+            search=self.search, ip='10.0.0.1', type='modbus', category='ics',
+            port='502', country_code='US', lat='1.0', lon='2.0',
+        )
+
+    def test_index(self):
+        response = self.client.get(reverse('index'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_devices(self):
+        response = self.client.get(reverse('devices'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_devices_with_filters(self):
+        for params in (
+            {'port': '502'},
+            {'type': 'modbus'},
+            {'category': 'ics'},
+            {'country': 'US'},
+            {'search_id': self.search.id},
+            {'vuln': 'CVE'},
+        ):
+            response = self.client.get(reverse('devices'), params)
+            self.assertEqual(response.status_code, 200, params)
+
+    def test_results(self):
+        response = self.client.get(reverse('results', args=[self.search.id]))
+        self.assertEqual(response.status_code, 200)
+
+    def test_device_page(self):
+        response = self.client.get(
+            reverse('device', args=[self.device.search_id, self.device.id, self.device.ip])
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_history(self):
+        response = self.client.get(reverse('history'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_map(self):
+        response = self.client.get(reverse('map'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_gallery(self):
+        response = self.client.get(reverse('gallery'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_sources(self):
+        response = self.client.get(reverse('sources'))
+        self.assertEqual(response.status_code, 200)
