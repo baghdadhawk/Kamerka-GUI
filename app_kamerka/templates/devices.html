@@ -13,6 +13,7 @@
         <!-- CSS INCLUDE -->
 
         <link rel="stylesheet" type="text/css" id="theme" href="{% static 'css/theme-default.css' %}"/>
+        <link rel="stylesheet" type="text/css" href="{% static 'css/kamerka-modern.css' %}"/>
         <!-- EOF CSS INCLUDE -->
     </head>
     <body>
@@ -156,7 +157,7 @@
                                                 <td> False </td>
                                                 {% endif %}
                                                 {% if device.honeypot_score >= 50 %}
-                                                <td><span style="background:#ff5050; color:#fff; padding:2px 6px; border-radius:3px;">honeypot ({{ device.honeypot_score }})</span></td>
+                                                <td><span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:2px 6px; border-radius:3px;">&#9888; honeypot ({{ device.honeypot_score }})</span></td>
                                                 {% else %}
                                                 <td></td>
                                                 {% endif %}

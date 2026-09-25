@@ -14,6 +14,7 @@
 
         <link rel="stylesheet" type="text/css" id="theme" href="{% static 'css/theme-default.css' %}"/>
         <link rel=stylesheet href=https://cdn.jsdelivr.net/npm/pretty-print-json@1.2/dist/pretty-print-json.dark-mode.css>
+        <link rel="stylesheet" type="text/css" href="{% static 'css/kamerka-modern.css' %}"/>
         <!-- EOF CSS INCLUDE -->
     </head>
 <style>
@@ -308,9 +309,9 @@
                 <p>
                     <strong>Local heuristic score:</strong> {{ device.honeypot_score }}/100
                     {% if is_likely_honeypot %}
-                    <span style="background:#ff5050; color:#fff; padding:2px 8px; border-radius:3px;">Likely honeypot</span>
+                    <span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:2px 8px; border-radius:3px;">&#9888; Likely honeypot</span>
                     {% else %}
-                    <span style="background:#1caf9a; color:#fff; padding:2px 8px; border-radius:3px;">Probably real</span>
+                    <span class="km-badge km-badge-success" style="background:#1caf9a; color:#fff; padding:2px 8px; border-radius:3px;">&#10003; Probably real</span>
                     {% endif %}
                     <br><small>(threshold: {{ honeypot_threshold }})</small>
                 </p>
