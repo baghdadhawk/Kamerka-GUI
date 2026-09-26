@@ -102,3 +102,27 @@ def is_target_authorized(ip, operation):
         if target in network:
             return True
     return False
+
+
+def matching_authorizations(ip, operation):
+    """Return matching authorization rows in deterministic preference order."""
+    from app_kamerka.models import ScanAuthorization
+
+    field = _OPERATION_FIELDS.get(operation)
+    if not field or not ip:
+        return []
+    try:
+        target = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return []
+    now = timezone.now()
+    matches = []
+    for authorization in ScanAuthorization.objects.filter(**{field: True}).order_by('-created_at', 'pk'):
+        if authorization.expires_at and authorization.expires_at <= now:
+            continue
+        try:
+            if target in ipaddress.ip_network(str(authorization.cidr).strip(), strict=False):
+                matches.append(authorization)
+        except ValueError:
+            continue
+    return matches

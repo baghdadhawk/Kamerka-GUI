@@ -1,4 +1,5 @@
 import json
+import ipaddress
 import logging
 import math
 import re
@@ -7,6 +8,10 @@ import maxminddb
 import os
 from time import sleep
 from celery import shared_task, current_task
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from django.core.exceptions import ValidationError
 from celery_progress.backend import ProgressRecorder
 from pybinaryedge import BinaryEdge
 from shodan import Shodan
@@ -22,7 +27,7 @@ from libnmap.parser import NmapParser
 from app_kamerka import exploits
 
 from app_kamerka.models import Device, DeviceNearby, Search, ShodanScan, BinaryEdgeScore, \
-    Whois, Bosch
+    Whois, Bosch, Operation, ScanAuthorization
 from app_kamerka.honeypot import score_device
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.net import PassiveClient
@@ -746,8 +751,136 @@ ics_scan = {"dnp3": "--script=nmap_scripts/dnp3-info.nse", "niagara": "--script=
             "tank": "--script=nmap_scripts/atg-info.nse", "modicon": "--script=nmap_scripts/modicon-info.nse"}
 
 
+def _blocked_active_operation(kind, id, error, operation_id=None):
+    operation = None
+    if operation_id:
+        try:
+            operation = Operation.objects.filter(pk=operation_id, kind=kind).first()
+        except (ValueError, TypeError, ValidationError):
+            operation = None
+    if operation is None:
+        device = Device.objects.filter(pk=id).first()
+        operation = Operation.objects.create(
+            kind=kind, status='blocked', device=device,
+            target_ip=device.ip if device else '', target_port=device.port if device else '',
+            target_type=device.type if device else '', error=error, finished_at=timezone.now(),
+        )
+    else:
+        changed = Operation.objects.filter(pk=operation.pk, status='queued').update(
+            status='blocked', error=error, finished_at=timezone.now(),
+        )
+        if not changed:
+            logger.warning('Ignoring duplicate active worker for operation %s', operation.pk)
+            return None
+    _record_operation_audit(operation, 'blocked', error)
+    logger.warning('Active %s operation %s blocked: %s', kind, operation.pk, error)
+    return None
+
+
+def _record_operation_audit(operation, status, detail=''):
+    from app_kamerka.models import AuditLog
+    try:
+        AuditLog.objects.create(
+            user=operation.actor, action=operation.kind, device=operation.device,
+            target=operation.target_ip,
+            detail=json.dumps({'operation_id': str(operation.pk), 'status': status,
+                               'error': str(detail)[:1000]}),
+            success=(status == 'succeeded'),
+        )
+    except Exception:
+        logger.exception('Unable to write active operation outcome audit')
+
+
+def _authorize_active_operation(kind, device_id, operation_id, authorization_id, actor_id,
+                                expected_ip, expected_port, expected_type):
+    """Revalidate the queued actor, feature gate, exact target and pinned scope."""
+    if not operation_id:
+        _blocked_active_operation(kind, device_id, 'Missing operation context')
+        return None
+    try:
+        operation = Operation.objects.select_related('actor', 'device').get(pk=operation_id, kind=kind)
+    except (Operation.DoesNotExist, ValueError, TypeError, ValidationError):
+        _blocked_active_operation(kind, device_id, 'Operation record unavailable', operation_id)
+        return None
+    if operation.status != 'queued':
+        logger.warning('Ignoring duplicate active worker for operation %s in state %s',
+                       operation.pk, operation.status)
+        return None
+    device = Device.objects.filter(pk=device_id).first()
+    if (not device or operation.device_id != device.pk or str(operation.device_id) != str(device_id) or
+            device.ip != operation.target_ip or device.port != operation.target_port or
+            device.type != operation.target_type or expected_ip != operation.target_ip or
+            expected_port != operation.target_port or expected_type != operation.target_type):
+        _blocked_active_operation(kind, device_id, 'Target changed after enqueue', operation_id)
+        return None
+    if operation.authorization_id is None or str(authorization_id) != str(operation.authorization_id):
+        _blocked_active_operation(kind, device_id, 'Pinned authorization missing or changed', operation_id)
+        return None
+    authorization = ScanAuthorization.objects.filter(pk=operation.authorization_id).first()
+    flag = 'allow_port_scan' if kind == 'scan' else 'allow_exploit'
+    try:
+        target = ipaddress.ip_address(operation.target_ip.strip())
+        scope = ipaddress.ip_network(authorization.cidr.strip(), strict=False) if authorization else None
+    except ValueError:
+        scope, target = None, None
+    if (not authorization or not getattr(authorization, flag) or
+            (authorization.expires_at and authorization.expires_at <= timezone.now()) or
+            target is None or scope is None or target not in scope):
+        _blocked_active_operation(kind, device_id, 'Pinned authorization revoked, expired, or out of scope', operation_id)
+        return None
+    User = get_user_model()
+    actor = User.objects.filter(pk=actor_id, is_active=True).first()
+    capability = 'active_scan' if kind == 'scan' else 'exploit'
+    if not actor or operation.actor_id != actor.pk or not actor.has_perm('app_kamerka.%s' % capability):
+        _blocked_active_operation(kind, device_id, 'Actor capability revoked or changed', operation_id)
+        return None
+    if kind == 'scan' and not settings.KAMERKA_ENABLE_ACTIVE_SCAN:
+        _blocked_active_operation(kind, device_id, 'Active scanning disabled by configuration', operation_id)
+        return None
+    if kind == 'exploit' and not settings.KAMERKA_ENABLE_EXPLOITATION:
+        _blocked_active_operation(kind, device_id, 'Exploitation disabled by configuration', operation_id)
+        return None
+    claimed_at = timezone.now()
+    if not Operation.objects.filter(pk=operation.pk, status='queued').update(
+            status='running', started_at=claimed_at, error=''):
+        logger.warning('Active operation %s was claimed by another worker', operation.pk)
+        return None
+    operation.status = 'running'
+    operation.started_at = claimed_at
+    operation.error = ''
+    return operation, device
+
+
+def _finish_active_operation(operation, result=None, error=None):
+    if error is None and isinstance(result, dict) and result.get('Error'):
+        error = result['Error']
+    operation.status = 'failed' if error else 'succeeded'
+    operation.error = str(error or '')[:4000]
+    operation.finished_at = timezone.now()
+    operation.save(update_fields=['status', 'error', 'finished_at'])
+    _record_operation_audit(operation, operation.status, operation.error)
+    return result
+
+
 @shared_task(bind=False, queue='active')
-def scan_task(id):
+def scan_task(id, operation_id=None, authorization_id=None, actor_id=None,
+              expected_ip=None, expected_port=None, expected_type=None):
+    context = _authorize_active_operation('scan', id, operation_id, authorization_id,
+                                          actor_id, expected_ip, expected_port, expected_type)
+    if context is None:
+        return {'Error': 'Active operation blocked'}
+    operation, _device = context
+    try:
+        result = _run_scan_task(id, device_snapshot=_device)
+        if result is None:
+            raise RuntimeError('Scan did not produce a result')
+        return _finish_active_operation(operation, result=result)
+    except Exception as exc:
+        _finish_active_operation(operation, error=exc)
+        raise
+
+
+def _run_scan_task(id, device_snapshot=None):
     """Active Nmap scan of a single device.
 
     Routed to the dedicated 'active' Celery queue (see kamerka/settings.py
@@ -758,7 +891,7 @@ def scan_task(id):
     task id for polling instead of blocking on Nmap.
     """
     return_dict = {}
-    device1 = Device.objects.get(id=id)
+    device1 = device_snapshot or Device.objects.get(id=id)
     ip = device1.ip
     port = device1.port
     type = device1.type
@@ -821,7 +954,8 @@ def scan_task(id):
 
 
 @shared_task(bind=False, queue='active')
-def exploit_task(id):
+def exploit_task(id, operation_id=None, authorization_id=None, actor_id=None,
+                 expected_ip=None, expected_port=None, expected_type=None):
     """Active exploitation/credential-check probe of a single device.
 
     Routed to the dedicated 'active' Celery queue -- see scan_task() above.
@@ -829,7 +963,20 @@ def exploit_task(id):
     app_kamerka/views.py, which enqueues this via .delay(id) and returns the
     task id for polling instead of blocking on the exploit probe.
     """
-    device1 = Device.objects.get(id=id)
+    context = _authorize_active_operation('exploit', id, operation_id, authorization_id,
+                                          actor_id, expected_ip, expected_port, expected_type)
+    if context is None:
+        return {'Error': 'Active operation blocked'}
+    operation, device1 = context
+    try:
+        result = _run_exploit_task(device1)
+        return _finish_active_operation(operation, result=result)
+    except Exception as exc:
+        _finish_active_operation(operation, error=exc)
+        raise
+
+
+def _run_exploit_task(device1):
     logger.info("exploit() for device type: %s", device1.type)
     if device1.type == "bosch_security":
         usernames = exploits.bosch_usernames(device1)

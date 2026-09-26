@@ -11,6 +11,7 @@ import pycountry
 from celery.result import AsyncResult
 from django.core import serializers
 from django.db.models import Count
+from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
@@ -18,8 +19,8 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 
 from app_kamerka import forms
 from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryEdgeScore, Whois, \
-    Bosch, AuditLog, ExploitTaskAccess, GeneralTaskResultAccess
-from app_kamerka.authz import require_capability, is_target_authorized
+    Bosch, AuditLog, ExploitTaskAccess, GeneralTaskResultAccess, Operation
+from app_kamerka.authz import require_capability, is_target_authorized, matching_authorizations
 from django.conf import settings
 from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
     binary_edge_scan, whoisxml, check_credits, nmap_scan, validate_nmap, validate_maxmind, scan_task, \
@@ -978,7 +979,8 @@ def scan_dev(request, id):
             )
         device_obj = _get_device_or_none(id)
         target_ip = device_obj.ip if device_obj else None
-        if not is_target_authorized(target_ip, 'port_scan'):
+        authorizations = matching_authorizations(target_ip, 'port_scan')
+        if not authorizations:
             record_audit(
                 request, 'scope_denied', device=device_obj, target=str(id),
                 detail='target not within an authorized scan scope', success=False,
@@ -987,10 +989,30 @@ def scan_dev(request, id):
                 json.dumps({'Error': "target not within an authorized scan scope"}),
                 content_type='application/json', status=403,
             )
-        scan_task_result = _mark_general_task_result(scan_task.delay(id))
-        record_audit(request, 'scan', device=_get_device_or_none(id), target=str(id),
-                     detail={'task_id': scan_task_result.id})
-        return HttpResponse(json.dumps({'task_id': scan_task_result.id}), content_type='application/json')
+        operation_id = uuid.uuid4()
+        task_id = 'active-' + uuid.uuid4().hex
+        operation = Operation.objects.create(
+            id=operation_id, kind='scan', actor=request.user, device=device_obj,
+            authorization_id=authorizations[0].pk, target_ip=device_obj.ip,
+            target_port=device_obj.port, target_type=device_obj.type, celery_task_id=task_id,
+        )
+        try:
+            scan_task.apply_async(
+                args=[str(id)], task_id=task_id,
+                kwargs={'operation_id': str(operation.id), 'authorization_id': operation.authorization_id,
+                        'actor_id': request.user.pk, 'expected_ip': operation.target_ip,
+                        'expected_port': operation.target_port, 'expected_type': operation.target_type},
+            )
+            GeneralTaskResultAccess.objects.get_or_create(task_id=task_id)
+        except Exception as exc:
+            operation.status = 'failed'
+            operation.error = 'Unable to enqueue operation: %s' % exc
+            operation.finished_at = timezone.now()
+            operation.save(update_fields=['status', 'error', 'finished_at'])
+            raise
+        record_audit(request, 'operation_queued', device=device_obj, target=device_obj.ip,
+                     detail={'operation_id': str(operation.id), 'task_id': task_id, 'status': 'queued'})
+        return HttpResponse(json.dumps({'task_id': task_id, 'operation_id': str(operation.id)}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
@@ -1010,7 +1032,8 @@ def exploit_dev(request, id):
             )
         device_obj = _get_device_or_none(id)
         target_ip = device_obj.ip if device_obj else None
-        if not is_target_authorized(target_ip, 'exploit'):
+        authorizations = matching_authorizations(target_ip, 'exploit')
+        if not authorizations:
             record_audit(
                 request, 'scope_denied', device=device_obj, target=str(id),
                 detail='target not within an authorized exploit scope', success=False,
@@ -1020,16 +1043,30 @@ def exploit_dev(request, id):
                 content_type='application/json', status=403,
             )
         task_id = 'exploit-' + uuid.uuid4().hex
+        operation = Operation.objects.create(
+            kind='exploit', actor=request.user, device=device_obj,
+            authorization_id=authorizations[0].pk, target_ip=device_obj.ip,
+            target_port=device_obj.port, target_type=device_obj.type, celery_task_id=task_id,
+        )
         ExploitTaskAccess.objects.create(task_id=task_id)
         try:
-            exploit_task.apply_async(args=[str(id)], task_id=task_id)
-        except Exception:
+            exploit_task.apply_async(
+                args=[str(id)], task_id=task_id,
+                kwargs={'operation_id': str(operation.id), 'authorization_id': operation.authorization_id,
+                        'actor_id': request.user.pk, 'expected_ip': operation.target_ip,
+                        'expected_port': operation.target_port, 'expected_type': operation.target_type},
+            )
+        except Exception as exc:
             # Broker acceptance can be ambiguous on connection timeouts; keep
             # the fail-closed marker even if the request must return an error.
+            operation.status = 'failed'
+            operation.error = 'Unable to enqueue operation: %s' % exc
+            operation.finished_at = timezone.now()
+            operation.save(update_fields=['status', 'error', 'finished_at'])
             raise
-        record_audit(request, 'exploit', device=_get_device_or_none(id), target=str(id),
-                     detail={'task_id': task_id})
-        return HttpResponse(json.dumps({'task_id': task_id}), content_type='application/json')
+        record_audit(request, 'operation_queued', device=device_obj, target=device_obj.ip,
+                     detail={'operation_id': str(operation.id), 'task_id': task_id, 'status': 'queued'})
+        return HttpResponse(json.dumps({'task_id': task_id, 'operation_id': str(operation.id)}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 

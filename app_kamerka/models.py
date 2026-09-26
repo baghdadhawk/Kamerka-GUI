@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 from django.db.models import JSONField
+import uuid
 
 
 # Create your models here.
@@ -189,6 +190,7 @@ class AuditLog(models.Model):
         ('notes', 'Notes update'),
         ('capability_denied', 'Capability denied'),
         ('scope_denied', 'Target scope denied'),
+        ('operation_queued', 'Active operation queued'),
     ]
 
     user = models.ForeignKey(
@@ -227,3 +229,35 @@ class GeneralTaskResultAccess(models.Model):
     """
     task_id = models.CharField(max_length=255, primary_key=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class Operation(models.Model):
+    """Durable lifecycle and authorization snapshot for active work.
+
+    ``succeeded`` means the worker completed without an execution error;
+    scan/exploit findings remain in Celery/device results and do not redefine
+    whether the operation worker itself completed.
+    """
+    STATUS_CHOICES = [(value, value.title()) for value in
+                      ('queued', 'running', 'succeeded', 'failed', 'blocked')]
+    KIND_CHOICES = [('scan', 'Scan'), ('exploit', 'Exploit')]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    kind = models.CharField(max_length=16, choices=KIND_CHOICES)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='queued')
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                               null=True, blank=True, related_name='active_operations')
+    device = models.ForeignKey(Device, on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name='operations')
+    authorization_id = models.PositiveBigIntegerField(null=True, blank=True)
+    target_ip = models.CharField(max_length=100)
+    target_port = models.CharField(max_length=10)
+    target_type = models.CharField(max_length=100)
+    celery_task_id = models.CharField(max_length=255, blank=True, default='', db_index=True)
+    error = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
