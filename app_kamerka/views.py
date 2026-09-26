@@ -2,6 +2,7 @@ import csv
 import json
 import logging
 import os
+import uuid
 from collections import Counter
 from urllib.parse import urlencode
 from django.core.files.storage import FileSystemStorage
@@ -17,7 +18,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 
 from app_kamerka import forms
 from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryEdgeScore, Whois, \
-    Bosch, AuditLog
+    Bosch, AuditLog, ExploitTaskAccess, GeneralTaskResultAccess
 from app_kamerka.authz import require_capability, is_target_authorized
 from django.conf import settings
 from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
@@ -56,6 +57,14 @@ def _get_device_or_none(id):
         return Device.objects.get(id=id)
     except Exception:
         return None
+
+
+def _mark_general_task_result(task_result):
+    """Allow generic result visibility only for known non-exploit task IDs."""
+    task_id = getattr(task_result, 'id', None) or getattr(task_result, 'task_id', None)
+    if isinstance(task_id, str) and task_id:
+        GeneralTaskResultAccess.objects.get_or_create(task_id=task_id)
+    return task_result
 
 
 def record_audit(request, action, device=None, target='', detail='', success=True):
@@ -195,9 +204,9 @@ def search_main(request):
             # kamerka.tasks.GROUPABLE_PORT_FAMILIES/partition_groupable.
             group_ports = bool(request.POST.get('group_ports'))
 
-            shodan_search_task = shodan_search.delay(fk=search.id, country=code, ics=ics_country,
+            shodan_search_task = _mark_general_task_result(shodan_search.delay(fk=search.id, country=code, ics=ics_country,
                                                       healthcare=extra_healthcare, infra=extra_infra,
-                                                      all_results=all_results, group_ports=group_ports)
+                                                      all_results=all_results, group_ports=group_ports))
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')
@@ -222,8 +231,8 @@ def search_main(request):
             else:
                 all_results = False
 
-            shodan_search_task = shodan_search.delay(fk=search.id, country=code, healthcare=healthcare_country,
-                                                      all_results=all_results)
+            shodan_search_task = _mark_general_task_result(shodan_search.delay(fk=search.id, country=code, healthcare=healthcare_country,
+                                                                              all_results=all_results))
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')
@@ -239,8 +248,8 @@ def search_main(request):
                             coordinates_search=request.POST.getlist('coordinates_search'))
 
             search.save()
-            shodan_search_task = shodan_search.delay(fk=search.id, coordinates=coordinates,
-                                     coordinates_search=request.POST.getlist('coordinates_search'))
+            shodan_search_task = _mark_general_task_result(shodan_search.delay(fk=search.id, coordinates=coordinates,
+                                     coordinates_search=request.POST.getlist('coordinates_search')))
 
             request.session['task_id'] = shodan_search_task.task_id
 
@@ -269,8 +278,8 @@ def search_main(request):
             else:
                 all_results = False
 
-            shodan_search_task = shodan_search.delay(fk=search.id, country=code, infra=infra_country,
-                                                      all_results=all_results)
+            shodan_search_task = _mark_general_task_result(shodan_search.delay(fk=search.id, country=code, infra=infra_country,
+                                                                              all_results=all_results))
             request.session['task_id'] = shodan_search_task.task_id
 
             return HttpResponseRedirect('index')
@@ -292,7 +301,7 @@ def search_main(request):
                 validate_maxmind()
                 search = Search(country="NMAP Scan", ics=myfile.name,nmap=True)
                 search.save()
-                nmap_task = nmap_scan.delay(uploaded_file_url ,fk=search.id)
+                nmap_task = _mark_general_task_result(nmap_scan.delay(uploaded_file_url ,fk=search.id))
 
                 request.session['task_id'] = nmap_task.task_id
                 logger.info("nmap_task queued: %s", nmap_task.task_id)
@@ -821,8 +830,15 @@ def device(request, id, device_id, ip):
     else:
         exploit_disabled_reason = None
 
+    can_view_exploit_results = request.user.has_perm('app_kamerka.view_exploit_results')
     context = {'device': all_devices,
                'nearby': nearby,
+               'device_map_data': {
+                   'lat': all_devices.lat,
+                   'lon': all_devices.lon,
+                   'country_code': all_devices.country_code,
+                   'nearby': list(nearby.values('lat', 'lon')),
+               },
                "shodan": shodan,
                'google_maps_key': google_maps_key,
                "passwd": info,
@@ -839,7 +855,8 @@ def device(request, id, device_id, ip):
                "can_scan": scan_disabled_reason is None,
                "scan_disabled_reason": scan_disabled_reason,
                "can_exploit": exploit_disabled_reason is None,
-               "exploit_disabled_reason": exploit_disabled_reason}
+               "exploit_disabled_reason": exploit_disabled_reason,
+               "can_view_exploit_results": can_view_exploit_results}
 
     return render(request, 'device.html', context)
 
@@ -850,7 +867,9 @@ def nearby(request, id, query):
         return method_not_allowed()
     if is_ajax(request):
         all_devices = Device.objects.filter(id=id)
-        device_nearby_task = devices_nearby.delay(lat=all_devices[0].lat, lon=all_devices[0].lon, id=id, query=query)
+        device_nearby_task = _mark_general_task_result(
+            devices_nearby.delay(lat=all_devices[0].lat, lon=all_devices[0].lon, id=id, query=query)
+        )
         record_audit(request, 'nearby', device=all_devices[0] if all_devices else None, target=query)
         return HttpResponse(json.dumps({'task_id': device_nearby_task.id}), content_type='application/json')
     else:
@@ -873,7 +892,7 @@ def shodan_scan(request, id):
             logger.info("shodan_scan: already in database for device %s", id)
             return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
 
-        shodan_scan_task2 = shodan_scan_task.delay(id=id)
+        shodan_scan_task2 = _mark_general_task_result(shodan_scan_task.delay(id=id))
         record_audit(request, 'shodan_scan', device=_get_device_or_none(id), target=str(id))
         return HttpResponse(json.dumps({'task_id': shodan_scan_task2.id}), content_type='application/json')
     else:
@@ -885,16 +904,38 @@ def get_task_info(request):
     try:
         if task_id is not None:
             task = AsyncResult(task_id)
+            is_exploit_task = task_id.startswith('exploit-') or ExploitTaskAccess.objects.filter(task_id=task_id).exists()
             data = {
                 'state': task.state,
-                'result': task.result,
             }
+            # Exploit results can contain credentials. The generic task
+            # status endpoint remains useful for polling without returning
+            # the sensitive payload.
+            if not is_exploit_task and GeneralTaskResultAccess.objects.filter(task_id=task_id).exists():
+                data['result'] = task.result
             return HttpResponse(json.dumps(data), content_type='application/json')
         else:
             return HttpResponse('No job id given.')
     except Exception as e:
         logger.exception("get_task_info failed for task_id=%s: %s", task_id, e)
-        return HttpResponse(json.dumps({'Error': str(e)}), content_type='application/json', status=500)
+        return HttpResponse(json.dumps({'Error': 'Task status unavailable'}), content_type='application/json', status=500)
+
+
+def get_celery_progress(request, task_id):
+    """Preserve Celery progress for passive jobs without leaking exploit data."""
+    is_exploit_task = task_id.startswith('exploit-') or ExploitTaskAccess.objects.filter(task_id=task_id).exists()
+    if is_exploit_task:
+        state = AsyncResult(task_id).state
+        complete = state in {'SUCCESS', 'FAILURE', 'REVOKED', 'IGNORED'}
+        return JsonResponse({'state': state, 'complete': complete,
+                             'success': state == 'SUCCESS' if complete else None})
+    if GeneralTaskResultAccess.objects.filter(task_id=task_id).exists():
+        from celery_progress.views import get_progress
+        return get_progress(request, task_id)
+    state = AsyncResult(task_id).state
+    complete = state in {'SUCCESS', 'FAILURE', 'REVOKED', 'IGNORED'}
+    return JsonResponse({'state': state, 'complete': complete,
+                         'success': state == 'SUCCESS' if complete else None})
 
 
 def get_shodan_scan_results(request, id):
@@ -946,7 +987,7 @@ def scan_dev(request, id):
                 json.dumps({'Error': "target not within an authorized scan scope"}),
                 content_type='application/json', status=403,
             )
-        scan_task_result = scan_task.delay(id)
+        scan_task_result = _mark_general_task_result(scan_task.delay(id))
         record_audit(request, 'scan', device=_get_device_or_none(id), target=str(id),
                      detail={'task_id': scan_task_result.id})
         return HttpResponse(json.dumps({'task_id': scan_task_result.id}), content_type='application/json')
@@ -978,12 +1019,36 @@ def exploit_dev(request, id):
                 json.dumps({'Error': "target not within an authorized exploit scope"}),
                 content_type='application/json', status=403,
             )
-        exploit_task_result = exploit_task.delay(id)
+        task_id = 'exploit-' + uuid.uuid4().hex
+        ExploitTaskAccess.objects.create(task_id=task_id)
+        try:
+            exploit_task.apply_async(args=[str(id)], task_id=task_id)
+        except Exception:
+            # Broker acceptance can be ambiguous on connection timeouts; keep
+            # the fail-closed marker even if the request must return an error.
+            raise
         record_audit(request, 'exploit', device=_get_device_or_none(id), target=str(id),
-                     detail={'task_id': exploit_task_result.id})
-        return HttpResponse(json.dumps({'task_id': exploit_task_result.id}), content_type='application/json')
+                     detail={'task_id': task_id})
+        return HttpResponse(json.dumps({'task_id': task_id}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
+
+
+@require_capability('view_exploit_results')
+def get_exploit_task_result(request):
+    """Return one exploit result only to users with the results capability."""
+    task_id = request.GET.get('task_id')
+    if not task_id or not ExploitTaskAccess.objects.filter(task_id=task_id).exists():
+        return HttpResponse(json.dumps({'Error': 'Result not found'}), content_type='application/json', status=404)
+    try:
+        task = AsyncResult(task_id)
+        return HttpResponse(
+            json.dumps({'state': task.state, 'result': task.result}, default=str),
+            content_type='application/json',
+        )
+    except Exception as e:
+        logger.exception("get_exploit_task_result failed for task_id=%s: %s", task_id, e)
+        return HttpResponse(json.dumps({'Error': 'Unable to retrieve result'}), content_type='application/json', status=500)
 
 # get_nearby_devices_coordinates used to be a byte-identical copy of
 # get_nearby_devices. Both URL names are kept (the coordinates-search UI and
@@ -992,17 +1057,20 @@ def exploit_dev(request, id):
 get_nearby_devices_coordinates = get_nearby_devices
 
 @require_capability('run_search', methods={'POST'})
-def send_to_field_agent(request, id, notes):
+def send_to_field_agent(request, id):
     """Persist a Device's notes locally. Kept under its original name/URL
-    since the device page's "Save notes" UI already posts here; it no
-    longer exfiltrates anything externally (the old Pastebin publishing
-    step has been removed)."""
+    since the device page's "Save notes" UI already posts here; notes are
+    accepted in the POST body so they are not exposed in request URLs."""
     if request.method != 'POST':
         return method_not_allowed()
     if is_ajax(request):
         logger.info("send_to_field_agent for device %s", id)
 
         host = Device.objects.get(id=id)
+        notes = request.POST.get('notes', '')
+        if len(notes) > 1000:
+            return HttpResponse(json.dumps({'Error': 'Notes must be at most 1000 characters'}),
+                                content_type='application/json', status=400)
         host.notes = notes
         host.save()
         record_audit(request, 'notes', device=host, target=str(id))
@@ -1024,7 +1092,7 @@ def get_binaryedge_score(request, id):
             logger.info("get_binaryedge_score: already in database for device %s", id)
             return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
 
-        be_task = binary_edge_scan.delay(id=id)
+        be_task = _mark_general_task_result(binary_edge_scan.delay(id=id))
         record_audit(request, 'binaryedge', device=_get_device_or_none(id), target=str(id))
 
         return HttpResponse(json.dumps({'task_id': be_task.id}), content_type='application/json')
@@ -1055,7 +1123,7 @@ def whois(request, id):
             logger.info("whois: already in database for device %s", id)
             return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
 
-        wh_task = whoisxml.delay(id=id)
+        wh_task = _mark_general_task_result(whoisxml.delay(id=id))
         record_audit(request, 'whois', device=_get_device_or_none(id), target=str(id))
 
         return HttpResponse(json.dumps({'task_id': wh_task.id}), content_type='application/json')

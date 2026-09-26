@@ -522,7 +522,9 @@
     onerror="window.kamMapLoadFailed = true;"></script>
 <script src="{% static 'js/kamerka_gmaps_theme.js' %}"></script>
 
+{{ device_map_data|json_script:"device-map-data" }}
 <script>
+var deviceMapData = JSON.parse(document.getElementById('device-map-data').textContent);
 /* map/marker/directions state is declared at top level (rather than
    inside kamInitDeviceMap() below) since AddMarker()/GetRoute() -- called
    from inline onclick handlers elsewhere on this page -- close over these
@@ -534,14 +536,14 @@ var directionsService;
 var init_marker;
 
 function AddMarker() {
-{% for dev in nearby %}
-       var init_marker = new google.maps.LatLng({{ dev.lat }},{{ dev.lon }});
+deviceMapData.nearby.forEach(function (point) {
+       var init_marker = new google.maps.LatLng(parseFloat(point.lat), parseFloat(point.lon));
     var marker = new google.maps.Marker({
     map: map,
     title: 'Coordinates',
     position: init_marker,
   });
-  {% endfor %}
+  });
     };
 
 function kamInitDeviceMap() {
@@ -550,7 +552,7 @@ function kamInitDeviceMap() {
     // below.
     directionsService = new google.maps.DirectionsService();
     google.maps.event.addDomListener(window, 'load', function () {
-var options = { componentRestrictions: { country: '{{ device.country_code}}' } };
+var options = { componentRestrictions: { country: deviceMapData.country_code } };
 
         new google.maps.places.Autocomplete(document.getElementById('txtDestination'), options);
         directionsDisplay = new google.maps.DirectionsRenderer({ 'draggable': true });
@@ -561,7 +563,7 @@ var options = { componentRestrictions: { country: '{{ device.country_code}}' } }
 
 
 
-    init_marker = new google.maps.LatLng({{ device.lat }},{{ device.lon }});
+    init_marker = new google.maps.LatLng(parseFloat(deviceMapData.lat), parseFloat(deviceMapData.lon));
     var mapOptions = {
         zoom: 13,
         center: init_marker,
@@ -585,7 +587,7 @@ marker = new google.maps.Marker({
     destination = document.getElementById("txtDestination").value;
 
     var request = {
-        origin: "{{ device.lat }},{{ device.lon }}",
+        origin: deviceMapData.lat + ',' + deviceMapData.lon,
         destination: destination,
         travelMode: google.maps.TravelMode.DRIVING
     };
@@ -672,12 +674,16 @@ library.json = {
 
 
 </script>
+            {{ device.scan|json_script:"scan-results-data" }}
+            {% if can_view_exploit_results %}{{ device.exploit|json_script:"exploit-results-data" }}{% endif %}
             <script>
-            $('#scan_results').html(library.json.prettyPrint({{ device.scan|safe }}));
-</script>
-            <script>
-            $('#exploit_results').html(library.json.prettyPrint({{ device.exploit|safe }}));
-</script>
+            $('#scan_results').text(JSON.stringify(JSON.parse(document.getElementById('scan-results-data').textContent), null, 3));
+            {% if can_view_exploit_results %}
+            $('#exploit_results').text(JSON.stringify(JSON.parse(document.getElementById('exploit-results-data').textContent), null, 3));
+            {% else %}
+            $('#exploit_results').text('Exploit results require the Exploit Results capability.');
+            {% endif %}
+            </script>
                 <script type="text/javascript">
 
 
@@ -845,7 +851,7 @@ $('#honeyscore_check').on('click', function(){
 var pgrbar7 = $('#progress-bar7');
 var pgrbar8 = $('#progress-bar8');
 
-function poll_active_op_result(task_id, pgrbar, resultSelector) {
+function poll_active_op_result(task_id, pgrbar, resultSelector, exploitResult) {
     $.ajax({
         type: 'get',
         url: '/get-task-info/',
@@ -853,32 +859,40 @@ function poll_active_op_result(task_id, pgrbar, resultSelector) {
         success: function (data) {
             if (data.state == 'PENDING' || data.state == 'PROGRESS' || data.state == 'STARTED' || data.state == 'RETRY') {
                 setTimeout(function () {
-                    poll_active_op_result(task_id, pgrbar, resultSelector);
+                    poll_active_op_result(task_id, pgrbar, resultSelector, exploitResult);
                 }, 2000);
             } else if (data.state == 'SUCCESS') {
                 pgrbar.css('display', 'none');
-                $(resultSelector).html(library.json.prettyPrint(data.result));
-                if (data.result && data.result.Error) {
-                    noty({text: data.result.Error, layout: 'topRight', type: 'error', timeout: 10000});
+                if (exploitResult) {
+                    $.get('/get-exploit-task-result/', {task_id: task_id}).done(function (resultData) {
+                        $(resultSelector).text(JSON.stringify(resultData.result, null, 3));
+                    }).fail(function () {
+                        $(resultSelector).text('Exploit result is unavailable.');
+                    });
+                } else {
+                    $(resultSelector).text(JSON.stringify(data.result, null, 3));
+                }
+                if (!exploitResult && data.result && data.result.Error) {
+                    noty({text: 'Task completed with an error.', layout: 'topRight', type: 'error', timeout: 10000});
                 } else {
                     noty({text: "Done", layout: 'topRight', type: 'success', timeout: 5000});
                 }
             } else {
                 pgrbar.css('display', 'none');
-                $(resultSelector).html('Task ' + data.state + '.');
+                $(resultSelector).text('Task ' + data.state + '.');
                 noty({text: "Task " + data.state, layout: 'topRight', type: 'error', timeout: 10000});
             }
         },
         error: function () {
             pgrbar.css('display', 'none');
-            $(resultSelector).html('Something went wrong!');
+            $(resultSelector).text('Something went wrong!');
         }
     });
 }
 
 $('#scan').on('click', function(){
        pgrbar7.css('display', 'block').val(0);
-       $('#scan_results').html('Running...');
+       $('#scan_results').text('Running...');
        $.ajax({
         type: "POST",
         url: "/scan/{{device.id}}",
@@ -887,16 +901,16 @@ $('#scan').on('click', function(){
                     poll_active_op_result(data.task_id, pgrbar7, '#scan_results');
                 } else if (data.Error) {
                     pgrbar7.css('display', 'none');
-                    $('#scan_results').html(data.Error);
-                    noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 10000});
+                    $('#scan_results').text(data.Error);
+                    noty({text: 'Scan could not be started.', layout: 'topRight', type: 'error', timeout: 10000});
                 }
             },
             error: function (xhr) {
                 pgrbar7.css('display', 'none');
                 var msg = "Something went wrong!";
                 try { msg = JSON.parse(xhr.responseText).Error || msg; } catch (e) {}
-                $('#scan_results').html(msg);
-                noty({text: msg , layout: 'topRight', type: 'error', timeout: 10000});
+                $('#scan_results').text(msg);
+                noty({text: 'Scan could not be started.', layout: 'topRight', type: 'error', timeout: 10000});
             }
         });
         return false;
@@ -904,25 +918,25 @@ $('#scan').on('click', function(){
 
 $('#exploit').on('click', function(){
        pgrbar8.css('display', 'block').val(0);
-       $('#exploit_results').html('Running...');
+       $('#exploit_results').text('Running...');
        $.ajax({
         type: "POST",
         url: "/exploit/{{device.id}}",
         success: function (data) {
                 if (data.task_id != null) {
-                    poll_active_op_result(data.task_id, pgrbar8, '#exploit_results');
+                    poll_active_op_result(data.task_id, pgrbar8, '#exploit_results', true);
                 } else if (data.Error) {
                     pgrbar8.css('display', 'none');
-                    $('#exploit_results').html(data.Error);
-                    noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 10000});
+                    $('#exploit_results').text(data.Error);
+                    noty({text: 'Exploit could not be started.', layout: 'topRight', type: 'error', timeout: 10000});
                 }
             },
             error: function (xhr) {
                 pgrbar8.css('display', 'none');
                 var msg = "Something went wrong!";
                 try { msg = JSON.parse(xhr.responseText).Error || msg; } catch (e) {}
-                $('#exploit_results').html(msg);
-                noty({text: msg , layout: 'topRight', type: 'error', timeout: 10000});
+                $('#exploit_results').text(msg);
+                noty({text: 'Exploit could not be started.', layout: 'topRight', type: 'error', timeout: 10000});
             }
         });
         return false;
@@ -933,7 +947,8 @@ $('#btn_send_all').on('click', function(){
 
        $.ajax({
         type: "POST",
-        url: "/send_to_field_agent/{{device.id}}/"+bla,
+        url: "/send_to_field_agent/{{device.id}}",
+        data: {notes: bla},
         success: function (data) {
         noty({text: "Updated" , layout: 'topRight', type: 'success', timeout: 1000});
                 if (data.task_id != null) {
@@ -1048,9 +1063,9 @@ function get_task_info(task_id,pgrbar) {
             url: '/get-task-info/',
             data: {'task_id': task_id},
             success: function (data) {
-                frm.html('');
+                frm.text('');
                 if (data.state == 'PENDING') {
-                    frm.html('Please wait...');
+                    frm.text('Please wait...');
                 }
                 else if (data.state == 'PROGRESS') {
                     pgrbar.css('display', 'block');
@@ -1067,7 +1082,7 @@ function get_task_info(task_id,pgrbar) {
                 }
             },
             error: function (data) {
-                frm.html("Something went wrong!");
+                frm.text("Something went wrong!");
             }
         });
     }
@@ -1190,7 +1205,8 @@ console.log(response);
         $btn.addClass('km-loading').prop('disabled', true);
         $.ajax({
             type: 'POST',
-            url: '/send_to_field_agent/' + deviceId + '/' + encodeURIComponent(notes),
+            url: '/send_to_field_agent/' + deviceId,
+            data: {notes: notes},
             success: function () {
                 noty({text: "Notes saved", layout: 'topRight', type: 'success', timeout: 2000});
             },
