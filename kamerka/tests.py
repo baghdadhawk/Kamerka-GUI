@@ -26,6 +26,7 @@ from kamerka.tasks import (
     shodan_search_worker,
     shodan_search_worker_grouped,
 )
+from kamerka.providers.settings import ProviderSettings, load_provider_settings
 
 
 class ExpandFamiliesTests(TestCase):
@@ -495,3 +496,62 @@ class CountDevicesTests(TestCase):
 
         self._patch_shodan(count_fn)
         self.assertEqual(count_devices('XX', 'some query'), 5)
+
+
+class ProviderSettingsTests(TestCase):
+    """load_provider_settings()/ProviderSettings: keys.json loads into a
+    validated, immutable settings object, and a missing/absent key reports
+    as unavailable instead of raising."""
+
+    def test_loads_keys_from_raw_dict(self):
+        settings = load_provider_settings({
+            'keys': {
+                'shodan': 'SHODAN_KEY',
+                'binaryedge': 'BE_KEY',
+                'whoisxmlapi': 'WHOIS_KEY',
+                'google_maps': 'MAPS_KEY',
+            }
+        })
+
+        self.assertEqual(settings.shodan_key, 'SHODAN_KEY')
+        self.assertEqual(settings.binaryedge_key, 'BE_KEY')
+        self.assertEqual(settings.whoisxmlapi_key, 'WHOIS_KEY')
+        self.assertEqual(settings.google_maps_key, 'MAPS_KEY')
+        self.assertTrue(settings.is_configured('shodan'))
+        self.assertEqual(settings.unavailable_providers(), [])
+
+    def test_missing_key_is_unavailable_not_a_crash(self):
+        settings = load_provider_settings({'keys': {'shodan': 'SHODAN_KEY'}})
+
+        self.assertTrue(settings.is_configured('shodan'))
+        self.assertFalse(settings.is_configured('binaryedge'))
+        self.assertIsNone(settings.binaryedge_key)
+        self.assertIn('binaryedge', settings.unavailable_providers())
+
+        with self.assertRaises(Exception):
+            settings.require('binaryedge')
+
+    def test_missing_or_malformed_keys_file_never_raises(self):
+        # A dict missing the "keys" section entirely, and one with an empty
+        # "keys" section, both yield an all-None, non-crashing
+        # ProviderSettings rather than raising.
+        for raw in ({}, {'keys': {}}):
+            settings = load_provider_settings(raw)
+            self.assertIsInstance(settings, ProviderSettings)
+            self.assertFalse(settings.is_configured('shodan'))
+            self.assertEqual(
+                sorted(settings.unavailable_providers()),
+                ['binaryedge', 'google_maps', 'shodan', 'whoisxmlapi'],
+            )
+
+    def test_tasks_module_exposes_a_provider_settings_instance(self):
+        self.assertIsInstance(tasks.provider_settings, ProviderSettings)
+
+    def test_unreadable_keys_file_never_raises(self):
+        from kamerka.providers import settings as provider_settings_module
+
+        with mock.patch.object(provider_settings_module, 'get_keys', return_value=None):
+            settings = load_provider_settings()
+
+        self.assertIsInstance(settings, ProviderSettings)
+        self.assertFalse(settings.is_configured('shodan'))
