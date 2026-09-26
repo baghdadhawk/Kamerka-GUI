@@ -76,6 +76,7 @@ class Device(models.Model):
             ('run_search', 'Can run passive Shodan searches and enrichment/triage/export'),
             ('active_scan', 'Can run active Nmap scans'),
             ('exploit', 'Can run exploitation modules'),
+            ('view_exploit_results', 'Can view exploitation results and credentials'),
             ('administer', 'Can administer scan scopes and users'),
         ]
 
@@ -207,3 +208,22 @@ class AuditLog(models.Model):
         who = self.user_id or "anonymous"
         return "%s by %s on %s @ %s" % (self.action, who, self.target or self.device_id, self.created_at)
 
+
+class ExploitTaskAccess(models.Model):
+    """Marks Celery task IDs whose results may contain retrieved secrets.
+
+    The generic progress endpoint uses this record to withhold sensitive
+    result payloads; the dedicated result endpoint checks a separate
+    capability before releasing them.
+    """
+    task_id = models.CharField(max_length=255, primary_key=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class GeneralTaskResultAccess(models.Model):
+    """Allow ordinary task result visibility for known passive tasks only.
+
+    Unknown and legacy task IDs fail closed in generic status endpoints.
+    """
+    task_id = models.CharField(max_length=255, primary_key=True)
+    created_at = models.DateTimeField(auto_now_add=True)

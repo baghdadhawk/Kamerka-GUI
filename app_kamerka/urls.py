@@ -15,6 +15,7 @@ urlpatterns = [
     path("results/<id>", views.results, name='results'),
 
     path("results/<id>/<device_id>/<ip>", views.device, name='device'),
+    path('celery-progress/<str:task_id>/', views.get_celery_progress, name='secure_celery_progress'),
     path('celery-progress/', include('celery_progress.urls')),
     path("<id>/nearby/<query>", views.nearby, name='nearby'),
     path("<id>/update_coordinates/<coordinates>", views.update_coordinates, name='update_coordinates'),
@@ -23,13 +24,14 @@ urlpatterns = [
 
     path("<id>/shodan/scan", views.shodan_scan, name='shodan_scan'),
     path('get-task-info/', views.get_task_info, name="get_task_info"),
+    path('get-exploit-task-result/', views.get_exploit_task_result, name="get_exploit_task_result"),
     path('get_shodan_scan_results/<id>', views.get_shodan_scan_results, name="get_shodan_scan_results"),
     path('get_nearby_devices/<id>', views.get_nearby_devices, name="get_nearby_devices"),
 
     path('get_nearby_devices_coordinates/<id>', views.get_nearby_devices_coordinates,
          name="get_nearby_devices_coordinates"),
     path('get_binaryedge_score/<id>', views.get_binaryedge_score, name="get_binaryedge_score"),
-    path('send_to_field_agent/<id>/<notes>', views.send_to_field_agent, name="send_to_field_agent"),
+    path('send_to_field_agent/<id>', views.send_to_field_agent, name="send_to_field_agent"),
     path('get_binaryedge_score_results/<id>', views.get_binaryedge_score_results, name="get_binaryedge_score_results"),
     path('get_honeyscore/<id>', views.get_honeyscore, name="get_honeyscore"),
     path('whois/<id>', views.whois, name="whois"),

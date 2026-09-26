@@ -13,7 +13,9 @@ from django.utils import timezone
 from app_kamerka.authz import is_target_authorized
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import score_device, HONEYPOT_THRESHOLD
-from app_kamerka.models import AuditLog, Device, ScanAuthorization, Search
+from app_kamerka.models import (
+    AuditLog, Device, ExploitTaskAccess, GeneralTaskResultAccess, ScanAuthorization, Search,
+)
 from app_kamerka.net import (
     ActiveClient,
     ACTIVE_TIMEOUT,
@@ -1318,28 +1320,32 @@ class PastebinRemovalTests(TestCase):
             self.assertFalse(hasattr(tasks, name), "%s should have been removed" % name)
 
     def test_send_to_field_agent_persists_notes_and_returns_ok(self):
+        url = reverse('send_to_field_agent', args=[self.device.id])
+        notes = 'notes with / and ? & credentials=private'
         response = self.client.post(
-            reverse('send_to_field_agent', args=[self.device.id, 'some notes']), **AJAX_HEADER
+            url, {'notes': notes}, **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'Status': 'OK'})
+        self.assertEqual(response.wsgi_request.path, url)
+        self.assertNotIn(notes, response.wsgi_request.get_full_path())
 
         self.device.refresh_from_db()
-        self.assertEqual(self.device.notes, 'some notes')
+        self.assertEqual(self.device.notes, notes)
 
     def test_send_to_field_agent_get_is_405(self):
         response = self.client.get(
-            reverse('send_to_field_agent', args=[self.device.id, 'notes']), **AJAX_HEADER
+            reverse('send_to_field_agent', args=[self.device.id]), **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 405)
 
     def test_send_to_field_agent_non_ajax_returns_no_task_id(self):
-        response = self.client.post(reverse('send_to_field_agent', args=[self.device.id, 'notes']))
+        response = self.client.post(reverse('send_to_field_agent', args=[self.device.id]), {'notes': 'notes'})
         self.assertEqual(response.json(), {'task_id': None})
 
     def test_send_to_field_agent_creates_audit_log_row(self):
         response = self.client.post(
-            reverse('send_to_field_agent', args=[self.device.id, 'audited notes']), **AJAX_HEADER
+            reverse('send_to_field_agent', args=[self.device.id]), {'notes': 'audited notes'}, **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(AuditLog.objects.count(), 1)
@@ -1374,7 +1380,7 @@ class ActiveOpsFeatureFlagTests(TestCase):
             mocked_scan.assert_not_called()
 
     def test_exploit_disabled_by_default_returns_403_and_does_not_exploit(self):
-        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async') as mocked_exploit:
             response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 403)
             self.assertIn('disabled', response.json()['Error'].lower())
@@ -1389,16 +1395,21 @@ class ActiveOpsFeatureFlagTests(TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json(), {'task_id': 'scan-task'})
             mocked_scan.assert_called_once_with(str(self.device.id))
+            self.assertTrue(GeneralTaskResultAccess.objects.filter(task_id='scan-task').exists())
 
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_enabled_enqueues_task_and_returns_task_id(self):
         with mock.patch(
-            'app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')
+            'app_kamerka.views.exploit_task.apply_async', return_value=_FakeAsyncResult('exploit-task')
         ) as mocked_exploit:
             response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {'task_id': 'exploit-task'})
-            mocked_exploit.assert_called_once_with(str(self.device.id))
+            task_id = response.json()['task_id']
+            self.assertTrue(task_id.startswith('exploit-'))
+            self.assertTrue(ExploitTaskAccess.objects.filter(task_id=task_id).exists())
+            self.assertEqual(mocked_exploit.call_count, 1)
+            self.assertEqual(mocked_exploit.call_args.kwargs['args'], [str(self.device.id)])
+            self.assertTrue(mocked_exploit.call_args.kwargs['task_id'].startswith('exploit-'))
 
     def test_scan_get_is_405(self):
         response = self.client.get(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
@@ -1432,7 +1443,7 @@ class ActiveOpsFeatureFlagTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_creates_audit_log_row(self):
         with mock.patch(
-            'app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')
+            'app_kamerka.views.exploit_task.apply_async', return_value=_FakeAsyncResult('exploit-task')
         ):
             response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
@@ -1457,7 +1468,7 @@ class ActiveOpsFeatureFlagTests(TestCase):
         self.assertFalse(row.success)
 
     def test_exploit_disabled_by_config_is_audited_as_failure(self):
-        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async') as mocked_exploit:
             response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1478,13 +1489,109 @@ class CapabilityGroupMigrationTests(TestCase):
             'Viewer': {'view_capability'},
             'Analyst': {'view_capability', 'run_search'},
             'Active Scanner': {'view_capability', 'run_search', 'active_scan'},
-            'Exploit Operator': {'view_capability', 'run_search', 'active_scan', 'exploit'},
-            'Administrator': {'view_capability', 'run_search', 'active_scan', 'exploit', 'administer'},
+            'Exploit Operator': {'view_capability', 'run_search', 'active_scan', 'exploit', 'view_exploit_results'},
+            'Administrator': {'view_capability', 'run_search', 'active_scan', 'exploit', 'view_exploit_results', 'administer'},
         }
         for group_name, expected_codenames in expected.items():
             group = Group.objects.get(name=group_name)
             codenames = {p.codename for p in group.permissions.all()}
             self.assertEqual(codenames, expected_codenames, group_name)
+
+
+class SensitiveExploitResultTests(TestCase):
+    def setUp(self):
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(
+            search=self.search, ip='6.6.6.6', type='modbus', category='ics',
+            scan={'Output': 'safe scan output'},
+            exploit={'Credentials': 'operator:secret', 'Output': 'exploit output'},
+        )
+        self.task_id = 'classified-exploit-task'
+        ExploitTaskAccess.objects.create(task_id=self.task_id)
+
+    def _client_for(self, username, groups):
+        client = Client()
+        client.force_login(make_user(username, groups=groups))
+        return client
+
+    def _get_device_page(self, client):
+        with mock.patch('app_kamerka.views.keys', {'keys': {'google_maps': ''}}):
+            return client.get(reverse('device', args=[self.search.id, self.device.id, self.device.ip]))
+
+    def test_json_script_payload_is_inert(self):
+        self.device.scan = {'Output': '</script><script>alert(1)</script>'}
+        self.device.exploit = {'Output': '</script><script>alert(2)</script>'}
+        self.device.save()
+        client = self._client_for('json_script_exploiter', ['Exploit Operator'])
+        response = self._get_device_page(client)
+        html = response.content.decode()
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('</script><script>alert(1)', html)
+        self.assertNotIn('</script><script>alert(2)', html)
+        self.assertIn('\\u003C/script\\u003E', html)
+
+    def test_viewer_cannot_access_exploit_payload_or_task_result(self):
+        client = self._client_for('result_viewer', ['Viewer'])
+        page = self._get_device_page(client)
+        self.assertEqual(page.status_code, 200)
+        self.assertNotIn('operator:secret', page.content.decode())
+        self.assertNotIn('exploit-results-data', page.content.decode())
+
+        with mock.patch('app_kamerka.views.AsyncResult') as async_result:
+            async_result.return_value.state = 'SUCCESS'
+            async_result.return_value.result = {'Credentials': 'operator:secret'}
+            status = client.get(reverse('get_task_info'), {'task_id': self.task_id})
+            self.assertEqual(status.status_code, 200)
+            self.assertEqual(status.json(), {'state': 'SUCCESS'})
+            progress = client.get(reverse('secure_celery_progress', args=[self.task_id]))
+            self.assertEqual(progress.status_code, 200)
+            self.assertNotIn('result', progress.json())
+            result = client.get(reverse('get_exploit_task_result'), {'task_id': self.task_id})
+            self.assertEqual(result.status_code, 403)
+            self.assertEqual(async_result.call_count, 2)
+
+
+    def test_exploit_operator_can_view_initial_and_polled_result(self):
+        client = self._client_for('result_operator', ['Exploit Operator'])
+        page = self._get_device_page(client)
+        self.assertIn('operator:secret', page.content.decode())
+
+        with mock.patch('app_kamerka.views.AsyncResult') as async_result:
+            async_result.return_value.state = 'SUCCESS'
+            async_result.return_value.result = {'Credentials': 'operator:secret'}
+            result = client.get(reverse('get_exploit_task_result'), {'task_id': self.task_id})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()['result'], {'Credentials': 'operator:secret'})
+        unknown = client.get(reverse('get_exploit_task_result'), {'task_id': 'not-a-recorded-task'})
+        self.assertEqual(unknown.status_code, 404)
+
+        client.logout()
+        operator = User.objects.get(username='result_operator')
+        operator.groups.clear()
+        client.force_login(operator)
+        revoked = client.get(reverse('get_exploit_task_result'), {'task_id': self.task_id})
+        self.assertEqual(revoked.status_code, 403)
+
+    def test_unknown_task_status_does_not_expose_raw_result(self):
+        client = self._client_for('unknown_status_viewer', ['Viewer'])
+        with mock.patch('app_kamerka.views.AsyncResult') as async_result:
+            async_result.return_value.state = 'SUCCESS'
+            async_result.return_value.result = {'Credentials': 'must-not-leak'}
+            response = client.get(reverse('get_task_info'), {'task_id': 'legacy-exploit-id'})
+            progress = client.get(reverse('secure_celery_progress', args=['legacy-exploit-id']))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'state': 'SUCCESS'})
+        self.assertEqual(progress.status_code, 200)
+        self.assertNotIn('result', progress.json())
+
+    def test_explicitly_registered_passive_task_keeps_its_result(self):
+        client = self._client_for('passive_status_viewer', ['Viewer'])
+        GeneralTaskResultAccess.objects.create(task_id='passive-task')
+        with mock.patch('app_kamerka.views.AsyncResult') as async_result:
+            async_result.return_value.state = 'PROGRESS'
+            async_result.return_value.result = {'percent': 37}
+            response = client.get(reverse('get_task_info'), {'task_id': 'passive-task'})
+        self.assertEqual(response.json(), {'state': 'PROGRESS', 'result': {'percent': 37}})
 
 
 class CapabilityRoleTests(TestCase):
@@ -1555,7 +1662,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_viewer_gets_403_on_exploit_endpoint(self):
         client = self._login('viewer5', groups=['Viewer'])
-        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async') as mocked_exploit:
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1582,7 +1689,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_analyst_gets_403_on_exploit(self):
         client = self._login('analyst3', groups=['Analyst'])
-        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async') as mocked_exploit:
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1600,7 +1707,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_active_scanner_gets_403_on_exploit(self):
         client = self._login('scanner2', groups=['Active Scanner'])
-        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async') as mocked_exploit:
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1610,10 +1717,12 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_operator_can_exploit_with_scope(self):
         client = self._login('exploiter1', groups=['Exploit Operator'])
-        with mock.patch('app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')) as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async', return_value=_FakeAsyncResult('exploit-task')) as mocked_exploit:
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
-        mocked_exploit.assert_called_once_with(str(self.device.id))
+        self.assertEqual(mocked_exploit.call_count, 1)
+        self.assertEqual(mocked_exploit.call_args.kwargs['args'], [str(self.device.id)])
+        self.assertTrue(mocked_exploit.call_args.kwargs['task_id'].startswith('exploit-'))
 
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_exploit_operator_can_also_scan_with_scope(self):
@@ -1641,7 +1750,7 @@ class CapabilityRoleTests(TestCase):
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
 
-        with mock.patch('app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')):
+        with mock.patch('app_kamerka.views.exploit_task.apply_async', return_value=_FakeAsyncResult('exploit-task')):
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
 
@@ -1759,7 +1868,7 @@ class TargetScopeAuthorizationTests(TestCase):
 
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_denied_with_no_authorization(self):
-        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async') as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         self.assertIn('scope', response.json()['Error'].lower())
@@ -1768,10 +1877,12 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_succeeds_with_in_scope_authorization(self):
         make_authorization(cidr='203.0.113.0/24', allow_port_scan=False, allow_exploit=True)
-        with mock.patch('app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')) as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async', return_value=_FakeAsyncResult('exploit-task')) as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
-        mocked_exploit.assert_called_once_with(str(self.device.id))
+        self.assertEqual(mocked_exploit.call_count, 1)
+        self.assertEqual(mocked_exploit.call_args.kwargs['args'], [str(self.device.id)])
+        self.assertTrue(mocked_exploit.call_args.kwargs['task_id'].startswith('exploit-'))
 
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_denied_when_authorization_expired(self):
@@ -1779,7 +1890,7 @@ class TargetScopeAuthorizationTests(TestCase):
             cidr='203.0.113.0/24', allow_exploit=True,
             expires_at=timezone.now() - timezone.timedelta(minutes=1),
         )
-        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async') as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1787,7 +1898,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_denied_when_authorization_lacks_exploit_flag(self):
         make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
-        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async') as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1795,7 +1906,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_denied_when_ip_outside_cidr(self):
         make_authorization(cidr='198.51.100.0/24', allow_port_scan=True, allow_exploit=True)
-        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.apply_async') as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
