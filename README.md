@@ -1,173 +1,211 @@
 # ꓘamerka GUI
 
-## Ultimate Internet of Things/Industrial Control Systems reconnaissance tool.
+## Internet of Things / Industrial Control Systems reconnaissance tool
 
 <p align="center"><img src="https://www.offensiveosint.io/content/images/2020/07/OffensiveOsint-logo-RGB-2.png" alt="logo" width="200"/></p>
 
-### Powered by Shodan - Supported by Binary Edge & WhoisXMLAPI
+### Powered by Shodan — supported by BinaryEdge & WhoisXMLAPI
 
-## NSA and CISA Recommend Immediate Actions to Reduce Exposure Across Operational Technologies and Control Systems
+Kamerka GUI discovers Internet-facing ICS, medical and IoT devices, enriches
+them with passive OSINT, and plots them on a map so an analyst can locate the
+physical facility behind an exposed device and report it to the appropriate
+CERT.
 
-> Shodan, Kamerka, are creating a “perfect storm” of 
-> 
-> 1) easy access to unsecured assets, 
-> 
-> 2) use of common, open-source information about devices, and 
-> 
-> 3) an extensive list of exploits deployable via common exploit frameworks (e.g., Metasploit, Core Impact, and Immunity Canvas).
+> This tool is for authorized security research, defensive reconnaissance and
+> responsible disclosure. Active scanning and exploitation touch real
+> third-party devices and are **disabled by default** — see
+> [Active scanning & exploitation](#active-scanning--exploitation).
 
-https://us-cert.cisa.gov/ncas/alerts/aa20-205a
+---
 
-## Usage
+## What it does
 
-#### 1. Scan for Internet facing Industrial Control Systems, Medical and Internet of Things devices based on country or coordinates.
-#### 2. Gather passive intelligence from WHOISXML, BinaryEdge and Shodan or active by scanning target directly.
-#### 3. Thanks to indicators from devices and google maps, pinpoit device to specific place or facility (hospital, wastewater treatment plant, gas station, university, etc.)
-#### 4. (Optional, not recommended) 4. Guess/Bruteforce or use default password to gain access to the device. Some exploits are implemented for couple specific IoTs.
-#### 5. Report devices in critical infrastructure to your local CERT.
+1. **Search** for Internet-facing Industrial Control Systems, medical and IoT
+   devices by country or by coordinates. Searches can target a single device
+   family or a whole curated **category** of families in one run.
+2. **Enrich** each device passively from Shodan, BinaryEdge and WhoisXMLAPI, or
+   (opt-in) actively by scanning the target directly.
+3. **Geolocate** — indicators parsed from device responses, combined with
+   Google Maps and Street View, help pinpoint a device to a specific facility.
+4. **Triage** — flag suspected false positives, score devices against a local
+   honeypot heuristic, and record analyst notes per device.
+5. **Report** critical-infrastructure exposure to your local CERT.
 
 ## Features
-- More than 100 ICS devices
-- Gallery section shows every gathered screenshot in one place
-- Interactive Google maps
-- Google street view support
-- Possibility to implement own exploits or scanning techiques
-- Support for NMAP scan in xml format as an input
-- Find the route and change location of device
-- Statistics for each search
-- Search Flick photos nearby your device
-- Position for vessels is scraped from device directly, rather than IP based
-- Some devices return hints or location in the response. It's parsed and displayed as an indicator that helps to geolocate device.
 
-## Articles
-https://www.offensiveosint.io/hack-the-planet-with-amerka-gui-ultimate-internet-of-things-industrial-control-systems-reconnaissance-tool/
+- Coverage of 100+ ICS / IoT device families, grouped into selectable categories
+- Passive enrichment from Shodan, BinaryEdge and WhoisXMLAPI
+- Local **honeypot scoring** heuristic to help surface deception hosts
+- **Triage workflow**: per-device status, suspected-false-positive flag and notes
+- **Export** filtered device sets
+- Interactive Google Maps + Street View; indicators parsed from responses aid geolocation
+- Gallery of every gathered screenshot; per-search statistics
+- NMAP XML import as an input source
+- Optional, opt-in active scanning and a small set of device-specific exploit PoCs
 
-https://www.offensiveosint.io/offensive-osint-s01e03-intelligence-gathering-on-critical-infrastructure-in-southeast-asia/
+> The interface is self-hosted end to end (jQuery, Bootstrap and fonts are
+> bundled locally); the only third-party runtime dependency in the browser is
+> Google Maps.
 
-https://www.offensiveosint.io/hack-like-its-2077-presenting-amerka-mobile/
+---
 
-https://www.zdnet.com/article/kamerka-osint-tool-shows-your-countrys-internet-connected-critical-infrastructure/
+## Requirements
 
-https://www.icscybersecurityconference.com/intelligence-gathering-on-u-s-critical-infrastructure/
+- Python 3.10+
+- [Redis](https://redis.io/) (Celery broker & result backend)
+- A **paid Shodan** account (required)
+- BinaryEdge, WhoisXMLAPI API keys (optional, for extra enrichment)
+- A Google Maps API key (for the map / Street View views)
+
+Python dependencies are pinned in [`requirements.txt`](requirements.txt) and
+include Django 5.2 LTS, Celery 5.6, redis 8.1 and the Shodan client.
 
 ## Installation
 
-### Requirements
-- beautiful soup
-- python3
-- django
-- pynmea2
-- celery
-- redis
-- Shodan paid account
-- BinaryEdge (Optional)
-- WHOISXMLAPI (Optional)
-- Flickr (Optional)
-- Google Maps API
-- xmltodict
-- python-libnmap
+```bash
+git clone https://github.com/baghdadhawk/Kamerka-GUI/
+cd Kamerka-GUI
 
-
-**Make sure your API keys are correct and put them in keys.json in main directory.**
-
-### Run
-```
-git clone https://github.com/woj-ciech/Kamerka-GUI/
-pip3 install -r requirements.txt
-python3 manage.py makemigrations
-python3 manage.py migrate
-python3 manage.py runserver
+python3 -m venv venv && . venv/bin/activate
+pip install -r requirements.txt
 ```
 
-In a new window (in main directory) run celery worker
-```celery worker -A kamerka --loglevel=info```
+### API keys
 
-For new version of Celery
-```celery --app kamerka worker```
+Copy the template and fill in your keys — `keys.json` is git-ignored and must
+never be committed:
 
-In a new window fire up redis
-```apt-get install redis```
-```redis-server```
+```bash
+cp keys.json.example keys.json
+$EDITOR keys.json
+```
 
-And server should be available on ```http://localhost:8000/```
+```json
+{
+  "keys": {
+    "shodan": "SHODAN_KEY",
+    "binaryedge": "BINARYEDGE_KEY",
+    "google_maps": "GOOGLE_MAPS_KEY",
+    "whoisxmlapi": "WHOISXMLAPI_KEY"
+  }
+}
+```
 
+By default keys are read from `keys.json` in the project root; set
+`KAMERKA_KEYS_FILE=/path/to/keys.json` to load them from elsewhere.
 
-## Search
-### Search for Industrial Control Devices in specific country
- ![](screens/search1.png)
+### Configuration (environment variables)
 
-- "All results" checkbox means get all results from Shodan, if it's turned off - only first page (100) results will be downloaded.
-- "Own database" checkbox does not work but shows that is possible to integrate your own geolocation database.
+The application is configured from the environment — nothing sensitive is
+hardcoded.
 
-### Search for Internet of things in specific coordinates
-Type your coordinates in format "lat,lon", hardcoded radius is 20km.
-  ![](screens/search2.png)
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DJANGO_SECRET_KEY` | *(random per start)* | Stable secret key. If unset, a random key is generated at startup and sessions won't survive restarts. **Set this in production.** |
+| `DJANGO_DEBUG` | `0` (off) | Set `1` for local development. When off, secure-cookie / nosniff / clickjacking hardening is enabled. |
+| `DJANGO_ALLOWED_HOSTS` | `localhost,127.0.0.1` | Comma-separated allowed hosts. |
+| `KAMERKA_KEYS_FILE` | `./keys.json` | Path to the API-keys file. |
+| `KAMERKA_ENABLE_ACTIVE_SCAN` | `0` (off) | Opt in to active Nmap scanning of targets. |
+| `KAMERKA_ENABLE_EXPLOITATION` | `0` (off) | Opt in to the device-specific exploit PoCs. |
 
-## Dashboard
-   ![](screens/dashboard.png)
+### Database & first user
 
-## Gallery
-![](screens/gallery.png)
+Authentication is required for **all** views, so create at least one user:
 
-## Maps
-### City map
- ![](screens/map.png)
+```bash
+export DJANGO_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(50))')"
+python manage.py migrate
+python manage.py createsuperuser
+```
 
-### Industrial Control Systems in Poland - ~2.5k different devices
-![](screens/map2.png)
+## Running
 
-## Statistics
-![](screens/stats.png)
+Kamerka needs three processes: Redis, a Celery worker, and the Django server.
 
-## Device map
-![](screens/device_map.png)
+```bash
+# 1) Redis (broker + result backend)
+redis-server
 
-## Intel
-![](screens/intel.png)
+# 2) Celery worker — default queue (searches, enrichment)
+celery -A kamerka worker --loglevel=info
 
-## Geolocate
-![](screens/map3.png)
+# 3) Django development server
+python manage.py runserver
+```
 
-## Scan & Exploit & Information
-![](screens/exploit.png)
+Then open <http://localhost:8000/> and log in.
 
-## Full list of supported devices with corresponding queries
-https://github.com/woj-ciech/Kamerka-GUI/blob/master/queries.md
+### Active-operations worker (optional)
 
-## NMAP Scripts
-- atg-info
-- codesys
-- cspv4-info
-- dnp3-info
-- enip-info
-- fox-info
-- modbus-discover
-- modicon-info
-- omron-info
-- pcworx-info
-- s7-enumerate
-- s7-info
+Active scanning and exploitation tasks are pinned to a dedicated `active`
+Celery queue so they can be run by a separate worker on network-isolated
+infrastructure. On Windows or when running the Nmap-based tasks, use the solo
+pool:
 
-## Exploits
-- CirCarLife SCADA 4.3.0 - Credential Disclosure
-- VideoIQ - Remote file disclosure
-- Grandstream UCM6202 1.0.18.13 - Remote Command Injection
-- Contec Smart Home 4.15 - Unauthorized Password Reset
-- Netwave IP Camera - Password Disclosure
-- Amcrest Cameras 2.520.AC00.18.R - Unauthenticated Audio Streaming
-- Lutron Quantum 2.0 - 3.2.243 - Information Disclosure
-- Bosch Security Systems DVR 630/650/670 Series - Multiple Vulnerabilities
+```bash
+celery -A kamerka worker -Q active --pool=solo --loglevel=info
+```
 
+Leave this worker unstarted (and the feature flags off) to run passive-only.
 
-## Used components
-- Joli admin template - https://github.com/sbilly/joli-admin
-- Search form - Colorlib Search Form v15
-- country picker - https://github.com/mojoaxel/bootstrap-select-country
-- Multiselect - https://github.com/varundewan/multiselect/
-- Arsen Zbidniakov Flat UI Checkbox https://codepen.io/ARS/pen/aeDHE/
-- icon from icons8.com and icon-icons.com
-- Nmap Scripts from NMAP Script Engine and Digital Bond repository
-- Exploits from exploit-db and routersploit
+---
 
-## Additional
-- I'm not responsible for any damage caused by using this tool.
+## Access control (RBAC)
+
+Every mutating action is capability-gated. Assign a user to one of the
+following groups via **Django admin → Users → Groups**; permissions are
+cumulative. A superuser holds all capabilities implicitly.
+
+| Group | Capabilities |
+| --- | --- |
+| **Viewer** | view data |
+| **Analyst** | view + run searches / enrichment |
+| **Active Scanner** | Analyst + active Nmap scan |
+| **Exploit Operator** | Active Scanner + run exploit PoCs |
+| **Administrator** | all of the above + administer |
+
+In addition to the role, an active operation against a target is only allowed
+if that target's IP is covered by a **scope authorization** (`ScanAuthorization`
+in the admin), which is checked fail-closed. Every attempt — allowed, denied by
+capability, denied by scope, or refused because the feature flag is off — is
+written to the **audit log** (`AuditLog` in the admin).
+
+## Active scanning & exploitation
+
+These reach out to, and in some cases (e.g. the Hikvision PoC) mutate, real
+third-party devices. They are gated by **three** independent controls, all of
+which must be satisfied:
+
+1. `KAMERKA_ENABLE_ACTIVE_SCAN` / `KAMERKA_ENABLE_EXPLOITATION` set in the
+   environment, **and**
+2. the user holds the `active_scan` / `exploit` capability, **and**
+3. the target IP is within an authorized scope.
+
+Only run these against systems you are explicitly authorized to test.
+
+---
+
+## Development
+
+```bash
+python manage.py test                 # full test suite
+python manage.py check                # system checks
+python manage.py makemigrations --check --dry-run
+```
+
+## Articles
+
+- https://www.offensiveosint.io/hack-the-planet-with-amerka-gui-ultimate-internet-of-things-industrial-control-systems-reconnaissance-tool/
+- https://www.offensiveosint.io/offensive-osint-s01e03-intelligence-gathering-on-critical-infrastructure-in-southeast-asia/
+- https://www.zdnet.com/article/kamerka-osint-tool-shows-your-countrys-internet-connected-critical-infrastructure/
+- https://us-cert.cisa.gov/ncas/alerts/aa20-205a
+
+## Screens
+
+| | |
+| --- | --- |
+| Search | ![](screens/search1.png) |
+| Dashboard | ![](screens/dashboard.png) |
+| Gallery | ![](screens/gallery.png) |
+| Map | ![](screens/map.png) |
+| Statistics | ![](screens/stats.png) |
