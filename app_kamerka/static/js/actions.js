@@ -1,5 +1,52 @@
-$(document).ready(function(){        
-    
+/* CSRF SETUP FOR AJAX -----------------------------------------------------
+   Every state-changing endpoint (nearby/update_coordinates/shodan_scan/
+   scan/exploit/whois/get_binaryedge_score/get_honeyscore/set_device_status/
+   send_to_field_agent) now requires POST, and Django's CsrfViewMiddleware
+   (kamerka/settings.py) rejects an unsafe request without a valid CSRF
+   token. This reads the `csrftoken` cookie Django sets (via {% csrf_token %}
+   or @ensure_csrf_cookie on the page) and attaches it as the X-CSRFToken
+   header on every non-GET/HEAD/OPTIONS/TRACE jQuery AJAX call, site-wide --
+   this file is loaded on every page that has action buttons, so this only
+   needs to live in one place. Any `fetch()` call that POSTs would need to
+   set the same header itself (getCookie() below is exposed on `window` for
+   that). */
+function getCookie(name) {
+    var cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        var cookies = document.cookie.split(';');
+        for (var i = 0; i < cookies.length; i++) {
+            var cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+window.getCookie = getCookie;
+
+function csrfSafeMethod(method) {
+    // These HTTP methods do not require CSRF protection.
+    return (/^(GET|HEAD|OPTIONS|TRACE)$/i).test(method);
+}
+
+if (window.jQuery) {
+    $.ajaxSetup({
+        beforeSend: function (xhr, settings) {
+            if (!csrfSafeMethod(settings.type) && !this.crossDomain) {
+                var csrftoken = getCookie('csrftoken');
+                if (csrftoken) {
+                    xhr.setRequestHeader('X-CSRFToken', csrftoken);
+                }
+            }
+        }
+    });
+}
+/* EOF CSRF SETUP FOR AJAX */
+
+$(document).ready(function(){
+
     /* PROGGRESS START */
     $.mpb("show",{value: [0,50],speed: 5});        
     /* END PROGGRESS START */

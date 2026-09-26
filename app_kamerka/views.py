@@ -15,10 +15,11 @@ from django.db.models import Count
 from django.http import HttpResponse, JsonResponse
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 from app_kamerka import forms
 from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryEdgeScore, Whois, \
-    Bosch
+    Bosch, AuditLog
 from django.conf import settings
 from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
     binary_edge_scan, whoisxml, check_credits, nmap_scan, validate_nmap, validate_maxmind, scan, \
@@ -35,6 +36,45 @@ logger = logging.getLogger(__name__)
 def is_ajax(request):
     """Replacement for the removed HttpRequest.is_ajax() (Django >= 3.1)."""
     return request.headers.get('x-requested-with') == 'XMLHttpRequest'
+
+
+def method_not_allowed(allowed='POST'):
+    """405 JSON response for the side-effecting endpoints below, which now
+    require POST (they used to be GET, gated only by the is_ajax() check --
+    unsafe, since a GET is treated by browsers/caches/tooling as safe and
+    idempotent)."""
+    response = HttpResponse(
+        json.dumps({'Error': 'Method not allowed, use POST'}),
+        content_type='application/json', status=405,
+    )
+    response['Allow'] = allowed
+    return response
+
+
+def _get_device_or_none(id):
+    """Best-effort Device lookup for audit logging -- never raises."""
+    try:
+        return Device.objects.get(id=id)
+    except Exception:
+        return None
+
+
+def record_audit(request, action, device=None, target='', detail='', success=True):
+    """Write one AuditLog row for a sensitive/side-effecting operation.
+    Never raises -- an audit-logging failure must not break the operation it
+    is recording."""
+    try:
+        user = request.user if getattr(request, 'user', None) and request.user.is_authenticated else None
+        AuditLog.objects.create(
+            user=user,
+            action=action,
+            device=device,
+            target=target or '',
+            detail=detail if isinstance(detail, str) else json.dumps(detail, default=str),
+            success=success,
+        )
+    except Exception as e:
+        logger.warning("record_audit failed for action=%s: %s", action, e)
 
 passwds = {"bosch_security":"""The Bosch Video Recorder 630/650 Series is an 8/16 
           channel digital recorder that uses the latest H.264 
@@ -271,6 +311,7 @@ def search_main(request):
         form = forms.CountryForm()
         return render(request, 'search_main.html', {'form': form})
 
+@ensure_csrf_cookie
 def index(request):
     all_devices = Device.objects.all()
     last_5_searches = Search.objects.filter().order_by('-id')[:5]
@@ -559,6 +600,7 @@ def export_devices(request):
         writer.writerow(row_dict(d))
     return response
 
+@ensure_csrf_cookie
 def map(request):
     all_devices = Device.objects.all()
 
@@ -579,6 +621,7 @@ def gallery(request):
     return render(request, "gallery.html", context=context)
 
 
+@ensure_csrf_cookie
 def results(request, id):
 
     all_devices = Device.objects.filter(search_id=id)
@@ -668,16 +711,19 @@ def history(request):
 
 
 def update_coordinates(request,id, coordinates):
-    if is_ajax(request) and request.method == 'GET':
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
         dev = Device.objects.get(id=id)
         splitted_coord = coordinates.split(",")
         dev.lat = splitted_coord[0]
         dev.lon = splitted_coord[1]
         dev.located = True
         dev.save()
+        record_audit(request, 'update_coordinates', device=dev, target=coordinates)
         return HttpResponse(json.dumps({'Status': "OK"}), content_type='application/json')
     else:
-        return HttpResponse(json.dumps({'Status': "NO OK"}), content_type='application/json')
+        return HttpResponse(json.dumps({'Status': "NO OK"}), content_type='application/json', status=400)
 
 
 def search_estimate(request):
@@ -739,6 +785,7 @@ def get_credits(request):
         return HttpResponse(json.dumps({'Status': "NO OK"}), content_type='application/json')
 
 
+@ensure_csrf_cookie
 def device(request, id, device_id, ip):
     all_devices = Device.objects.get(search_id=id, id=device_id)
     nearby = DeviceNearby.objects.filter(device_id=all_devices.id)
@@ -798,12 +845,15 @@ def device(request, id, device_id, ip):
 
 
 def nearby(request, id, query):
-    if is_ajax(request) and request.method == 'GET':
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
         all_devices = Device.objects.filter(id=id)
         device_nearby_task = devices_nearby.delay(lat=all_devices[0].lat, lon=all_devices[0].lon, id=id, query=query)
+        record_audit(request, 'nearby', device=all_devices[0] if all_devices else None, target=query)
         return HttpResponse(json.dumps({'task_id': device_nearby_task.id}), content_type='application/json')
     else:
-        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
+        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json', status=400)
 
 
 def sources(request):
@@ -811,7 +861,9 @@ def sources(request):
 
 
 def shodan_scan(request, id):
-    if is_ajax(request) and request.method == 'GET':
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
 
         shodan_scan2 = ShodanScan.objects.filter(device_id=id)
 
@@ -820,9 +872,10 @@ def shodan_scan(request, id):
             return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
 
         shodan_scan_task2 = shodan_scan_task.delay(id=id)
+        record_audit(request, 'shodan_scan', device=_get_device_or_none(id), target=str(id))
         return HttpResponse(json.dumps({'task_id': shodan_scan_task2.id}), content_type='application/json')
     else:
-        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
+        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json', status=400)
 
 
 def get_task_info(request):
@@ -867,7 +920,9 @@ def get_nearby_devices(request, id):
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def scan_dev(request, id):
-    if is_ajax(request) and request.method == 'GET':
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
         if not settings.KAMERKA_ENABLE_ACTIVE_SCAN:
             return HttpResponse(
                 json.dumps({'Error': "Active scanning is disabled"}),
@@ -875,14 +930,19 @@ def scan_dev(request, id):
             )
         res = scan(id)
         if res:
+            record_audit(request, 'scan', device=_get_device_or_none(id), target=str(id), detail=res)
             return HttpResponse(json.dumps(res), content_type='application/json')
         else:
+            record_audit(request, 'scan', device=_get_device_or_none(id), target=str(id), success=False,
+                         detail='Connection Error')
             return HttpResponse(json.dumps({'Error': "Connection Error"}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 def exploit_dev(request, id):
-    if is_ajax(request) and request.method == 'GET':
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
         if not settings.KAMERKA_ENABLE_EXPLOITATION:
             return HttpResponse(
                 json.dumps({'Error': "Exploitation is disabled"}),
@@ -890,8 +950,11 @@ def exploit_dev(request, id):
             )
         res = exploit(id)
         if res:
+            record_audit(request, 'exploit', device=_get_device_or_none(id), target=str(id), detail=res)
             return HttpResponse(json.dumps(res), content_type='application/json')
         else:
+            record_audit(request, 'exploit', device=_get_device_or_none(id), target=str(id), success=False,
+                         detail='Connection Error')
             return HttpResponse(json.dumps({'Error': "Connection Error"}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
@@ -907,20 +970,25 @@ def send_to_field_agent(request, id, notes):
     since the device page's "Save notes" UI already posts here; it no
     longer exfiltrates anything externally (the old Pastebin publishing
     step has been removed)."""
-    if is_ajax(request) and request.method == 'GET':
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
         logger.info("send_to_field_agent for device %s", id)
 
         host = Device.objects.get(id=id)
         host.notes = notes
         host.save()
+        record_audit(request, 'notes', device=host, target=str(id))
 
         return HttpResponse(json.dumps({'Status': "OK"}), content_type='application/json')
     else:
-        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
+        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json', status=400)
 
 
 def get_binaryedge_score(request, id):
-    if is_ajax(request) and request.method == 'GET':
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
 
         be = BinaryEdgeScore.objects.filter(device_id=id)
 
@@ -929,10 +997,11 @@ def get_binaryedge_score(request, id):
             return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
 
         be_task = binary_edge_scan.delay(id=id)
+        record_audit(request, 'binaryedge', device=_get_device_or_none(id), target=str(id))
 
         return HttpResponse(json.dumps({'task_id': be_task.id}), content_type='application/json')
     else:
-        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
+        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json', status=400)
 
 
 def get_binaryedge_score_results(request, id):
@@ -947,7 +1016,9 @@ def get_binaryedge_score_results(request, id):
 
 
 def whois(request, id):
-    if is_ajax(request) and request.method == 'GET':
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
 
         whoiss = Whois.objects.filter(device_id=id)
 
@@ -956,10 +1027,11 @@ def whois(request, id):
             return HttpResponse(json.dumps({'Error': "Already in database"}), content_type='application/json')
 
         wh_task = whoisxml.delay(id=id)
+        record_audit(request, 'whois', device=_get_device_or_none(id), target=str(id))
 
         return HttpResponse(json.dumps({'task_id': wh_task.id}), content_type='application/json')
     else:
-        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json')
+        return HttpResponse(json.dumps({'task_id': None}), content_type='application/json', status=400)
 
 
 def get_honeyscore(request, id):
@@ -970,11 +1042,14 @@ def get_honeyscore(request, id):
     this app. Best-effort: kamerka.tasks.honeyscore() itself never raises,
     it returns None on any failure.
     """
-    if is_ajax(request) and request.method == 'GET':
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
         device1 = Device.objects.get(id=id)
         result = honeyscore(device1.ip)
         device1.honeyscore = result
         device1.save()
+        record_audit(request, 'honeyscore', device=device1, target=device1.ip, detail={'honeyscore': result})
         return HttpResponse(json.dumps({'honeyscore': result}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
@@ -993,12 +1068,13 @@ def get_whois(request, id):
 
 def set_device_status(request, id):
     """AJAX endpoint to set a Device's manual triage status (see
-    Device.STATUS_CHOICES). Accepts the new status via GET or POST (`status`
-    param), mirroring the whois/get_binaryedge_score AJAX pattern. The UI to
-    drive this comes in a later batch; this is just the model + endpoint.
+    Device.STATUS_CHOICES). Requires POST (`status` param) -- this mutates
+    state, so it is no longer accepted over GET.
     """
-    if is_ajax(request) and request.method in ('GET', 'POST'):
-        new_status = request.POST.get('status') or request.GET.get('status')
+    if request.method != 'POST':
+        return method_not_allowed()
+    if is_ajax(request):
+        new_status = request.POST.get('status')
         valid_statuses = {choice[0] for choice in Device.STATUS_CHOICES}
 
         if new_status not in valid_statuses:
@@ -1014,6 +1090,7 @@ def set_device_status(request, id):
 
         device1.status = new_status
         device1.save()
+        record_audit(request, 'set_status', device=device1, target=str(id), detail={'status': new_status})
 
         return HttpResponse(json.dumps({'status': device1.status}), content_type='application/json')
     else:

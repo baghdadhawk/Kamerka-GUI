@@ -688,7 +688,7 @@ library.json = {
     $('#nearby').on('click', function(){
     var bla = $('#nearby_search').val();
         $.ajax({
-        type: "GET",
+        type: "POST",
         url: "/{{device.id}}/nearby/"+bla,
         success: function (data) {
                 if (data.task_id != null) {
@@ -705,7 +705,7 @@ library.json = {
         $('#btn_update_location').on('click', function(){
     var bla = $('#update_location').val();
         $.ajax({
-        type: "GET",
+        type: "POST",
         url: "/{{device.id}}/update_coordinates/"+bla,
         success: function (data) {
         noty({text: "Updated" , layout: 'topRight', type: 'success', timeout: 1000});
@@ -752,7 +752,7 @@ marker.addListener('click', function() {
     var pgrbar2 = $('#progress-bar2');
     $('#shodan_scan').on('click', function(){
         $.ajax({
-        type: "GET",
+        type: "POST",
         url: "/{{device.id}}/shodan/scan",
         success: function (data) {
                 if (data.task_id != null) {
@@ -772,7 +772,7 @@ marker.addListener('click', function() {
 
 $('#binaryedge_scan').on('click', function(){
        $.ajax({
-        type: "GET",
+        type: "POST",
         url: "/get_binaryedge_score/{{device.id}}",
         success: function (data) {
                 if (data.task_id != null) {
@@ -792,7 +792,7 @@ $('#binaryedge_scan').on('click', function(){
 
 $('#whois_scan').on('click', function(){
        $.ajax({
-        type: "GET",
+        type: "POST",
         url: "/whois/{{device.id}}",
         success: function (data) {
 
@@ -814,7 +814,7 @@ $('#whois_scan').on('click', function(){
 
 $('#honeyscore_check').on('click', function(){
        $.ajax({
-        type: "GET",
+        type: "POST",
         url: "/get_honeyscore/{{device.id}}",
         success: function (data) {
                 if (data.honeyscore != null) {
@@ -838,7 +838,7 @@ $('#honeyscore_check').on('click', function(){
 
 $('#scan').on('click', function(){
        $.ajax({
-        type: "GET",
+        type: "POST",
         url: "/scan/{{device.id}}",
         success: function (data) {
            console.log(data);
@@ -862,7 +862,7 @@ $('#scan').on('click', function(){
 
 $('#exploit').on('click', function(){
        $.ajax({
-        type: "GET",
+        type: "POST",
         url: "/exploit/{{device.id}}",
         success: function (data) {
            console.log(data);
@@ -888,7 +888,7 @@ $('#btn_send_all').on('click', function(){
     var bla = $('#notes').val();
 
        $.ajax({
-        type: "GET",
+        type: "POST",
         url: "/send_to_field_agent/{{device.id}}/"+bla,
         success: function (data) {
         noty({text: "Updated" , layout: 'topRight', type: 'success', timeout: 1000});
@@ -1172,7 +1172,7 @@ console.log(response);
 
         $btn.addClass('km-loading').prop('disabled', true);
         $.ajax({
-            type: 'GET',
+            type: 'POST',
             url: '/send_to_field_agent/' + deviceId + '/' + encodeURIComponent(notes),
             success: function () {
                 noty({text: "Notes saved", layout: 'topRight', type: 'success', timeout: 2000});

@@ -9,7 +9,7 @@ from django.urls import reverse
 
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import score_device, HONEYPOT_THRESHOLD
-from app_kamerka.models import Device, Search
+from app_kamerka.models import AuditLog, Device, Search
 from app_kamerka.net import (
     ActiveClient,
     ACTIVE_TIMEOUT,
@@ -606,13 +606,17 @@ class HoneyscoreViewTests(TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_non_ajax_is_400(self):
-        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]))
+    def test_get_is_405(self):
+        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('get_honeyscore', args=[self.device.id]))
         self.assertEqual(response.status_code, 400)
 
     def test_ajax_stores_and_returns_float(self):
         self._patch_shodan(0.87)
-        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        response = self.client.post(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'honeyscore': 0.87})
         self.device.refresh_from_db()
@@ -620,11 +624,20 @@ class HoneyscoreViewTests(TestCase):
 
     def test_ajax_failure_stores_none(self):
         self._patch_shodan(_RAISE)
-        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        response = self.client.post(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'honeyscore': None})
         self.device.refresh_from_db()
         self.assertIsNone(self.device.honeyscore)
+
+    def test_creates_audit_log_row(self):
+        self._patch_shodan(0.5)
+        response = self.client.post(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'honeyscore')
+        self.assertEqual(row.device_id, self.device.id)
 
 
 _RAISE = object()  # sentinel telling FakeShodanClient.honeyscore to raise
@@ -761,7 +774,7 @@ class SetDeviceStatusTests(TestCase):
         self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
 
     def test_valid_status_saves_and_returns_json(self):
-        response = self.client.get(
+        response = self.client.post(
             reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}, **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 200)
@@ -773,7 +786,7 @@ class SetDeviceStatusTests(TestCase):
         self.assertEqual(self.device.status, 'new')
 
     def test_invalid_status_is_rejected(self):
-        response = self.client.get(
+        response = self.client.post(
             reverse('set_device_status', args=[self.device.id]), {'status': 'bogus'}, **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 400)
@@ -781,11 +794,21 @@ class SetDeviceStatusTests(TestCase):
         self.assertEqual(self.device.status, 'new')
 
     def test_missing_status_is_rejected(self):
-        response = self.client.get(reverse('set_device_status', args=[self.device.id]), **AJAX_HEADER)
+        response = self.client.post(reverse('set_device_status', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 400)
 
-    def test_non_ajax_is_400(self):
+    def test_get_is_405(self):
+        # Side-effecting endpoint: GET is no longer accepted at all, even
+        # with the AJAX header.
         response = self.client.get(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 405)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'new')
+
+    def test_non_ajax_post_is_400(self):
+        response = self.client.post(
             reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}
         )
         self.assertEqual(response.status_code, 400)
@@ -799,6 +822,19 @@ class SetDeviceStatusTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.device.refresh_from_db()
         self.assertEqual(self.device.status, 'reviewed')
+
+    def test_creates_audit_log_row(self):
+        self.assertEqual(AuditLog.objects.count(), 0)
+        response = self.client.post(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'set_status')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertEqual(row.user_id, self.user.id)
+        self.assertTrue(row.success)
 
     def test_devices_view_status_filter(self):
         search = self.device.search
@@ -1220,7 +1256,7 @@ class DeviceTriagePageTests(TestCase):
     def test_set_device_status_updates_and_page_reflects_it(self):
         device = Device.objects.create(search=self.search, ip='3.3.3.3', type='modbus', category='ics', status='new')
 
-        response = self.client.get(
+        response = self.client.post(
             reverse('set_device_status', args=[device.id]), {'status': 'confirmed'}, **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 200)
@@ -1252,7 +1288,7 @@ class PastebinRemovalTests(TestCase):
             self.assertFalse(hasattr(tasks, name), "%s should have been removed" % name)
 
     def test_send_to_field_agent_persists_notes_and_returns_ok(self):
-        response = self.client.get(
+        response = self.client.post(
             reverse('send_to_field_agent', args=[self.device.id, 'some notes']), **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 200)
@@ -1261,9 +1297,25 @@ class PastebinRemovalTests(TestCase):
         self.device.refresh_from_db()
         self.assertEqual(self.device.notes, 'some notes')
 
+    def test_send_to_field_agent_get_is_405(self):
+        response = self.client.get(
+            reverse('send_to_field_agent', args=[self.device.id, 'notes']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 405)
+
     def test_send_to_field_agent_non_ajax_returns_no_task_id(self):
-        response = self.client.get(reverse('send_to_field_agent', args=[self.device.id, 'notes']))
+        response = self.client.post(reverse('send_to_field_agent', args=[self.device.id, 'notes']))
         self.assertEqual(response.json(), {'task_id': None})
+
+    def test_send_to_field_agent_creates_audit_log_row(self):
+        response = self.client.post(
+            reverse('send_to_field_agent', args=[self.device.id, 'audited notes']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'notes')
+        self.assertEqual(row.device_id, self.device.id)
 
 
 class ActiveOpsFeatureFlagTests(TestCase):
@@ -1279,14 +1331,14 @@ class ActiveOpsFeatureFlagTests(TestCase):
 
     def test_scan_disabled_by_default_returns_403_and_does_not_scan(self):
         with mock.patch('app_kamerka.views.scan') as mocked_scan:
-            response = self.client.get(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+            response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 403)
             self.assertIn('disabled', response.json()['Error'].lower())
             mocked_scan.assert_not_called()
 
     def test_exploit_disabled_by_default_returns_403_and_does_not_exploit(self):
         with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
-            response = self.client.get(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+            response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 403)
             self.assertIn('disabled', response.json()['Error'].lower())
             mocked_exploit.assert_not_called()
@@ -1294,7 +1346,7 @@ class ActiveOpsFeatureFlagTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_enabled_calls_through_and_returns_200(self):
         with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}) as mocked_scan:
-            response = self.client.get(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+            response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json(), {'State': 'open'})
             mocked_scan.assert_called_once_with(str(self.device.id))
@@ -1302,18 +1354,48 @@ class ActiveOpsFeatureFlagTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_enabled_calls_through_and_returns_200(self):
         with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}) as mocked_exploit:
-            response = self.client.get(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+            response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json(), {'Success': 'done'})
             mocked_exploit.assert_called_once_with(str(self.device.id))
 
-    def test_scan_disabled_non_ajax_is_400(self):
-        response = self.client.get(reverse('scan', args=[self.device.id]))
+    def test_scan_get_is_405(self):
+        response = self.client.get(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_exploit_get_is_405(self):
+        response = self.client.get(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_scan_disabled_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('scan', args=[self.device.id]))
         self.assertEqual(response.status_code, 400)
 
-    def test_exploit_disabled_non_ajax_is_400(self):
-        response = self.client.get(reverse('exploit', args=[self.device.id]))
+    def test_exploit_disabled_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('exploit', args=[self.device.id]))
         self.assertEqual(response.status_code, 400)
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_creates_audit_log_row(self):
+        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}):
+            response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'scan')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertTrue(row.success)
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_creates_audit_log_row(self):
+        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}):
+            response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'exploit')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertTrue(row.success)
 
 
 def _fake_response(body=b'{}', status_code=200, chunk_size=8):
@@ -1483,3 +1565,190 @@ class PassiveCallSitesUseSharedClientTests(TestCase):
         self.assertTrue(fake_client.get.called)
         called_url = fake_client.get.call_args[0][0]
         self.assertIn('whoisxmlapi.com', called_url)
+
+
+class _FakeAsyncResult:
+    def __init__(self, task_id='fake-task-id'):
+        self.id = task_id
+        self.task_id = task_id
+
+
+class SideEffectingEndpointsPostOnlyTests(TestCase):
+    """update_coordinates/nearby/shodan_scan/whois/get_binaryedge_score used
+    to be GET, gated only by the is_ajax() check -- a GET is treated by
+    browsers/caches/tooling as safe and idempotent, so a mutating/
+    side-effecting operation must never be reachable that way. They are now
+    POST-only (still AJAX-gated) and CSRF-protected via Django's
+    CsrfViewMiddleware. Any celery `.delay(...)` call is mocked -- no broker
+    involved."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='postonly_tester', password='pw12345')
+        self.client.force_login(self.user)
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(
+            search=search, ip='1.2.3.4', type='modbus', category='ics', lat='1.0', lon='2.0',
+        )
+
+    # -- update_coordinates ------------------------------------------------
+
+    def test_update_coordinates_get_is_405(self):
+        response = self.client.get(
+            reverse('update_coordinates', args=[self.device.id, '3.0,4.0']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 405)
+
+    def test_update_coordinates_post_updates_device_and_logs(self):
+        response = self.client.post(
+            reverse('update_coordinates', args=[self.device.id, '3.0,4.0']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'Status': 'OK'})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.lat, '3.0')
+        self.assertEqual(self.device.lon, '4.0')
+        self.assertTrue(self.device.located)
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'update_coordinates')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertEqual(row.target, '3.0,4.0')
+
+    def test_update_coordinates_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('update_coordinates', args=[self.device.id, '3.0,4.0']))
+        self.assertEqual(response.status_code, 400)
+
+    # -- nearby --------------------------------------------------------
+
+    def test_nearby_get_is_405(self):
+        response = self.client.get(reverse('nearby', args=[self.device.id, 'webcam']), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_nearby_post_queues_task_and_logs(self):
+        with mock.patch(
+            'app_kamerka.views.devices_nearby.delay', return_value=_FakeAsyncResult('nearby-task')
+        ) as mocked_delay:
+            response = self.client.post(reverse('nearby', args=[self.device.id, 'webcam']), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'task_id': 'nearby-task'})
+        mocked_delay.assert_called_once()
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'nearby')
+        self.assertEqual(row.target, 'webcam')
+
+    def test_nearby_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('nearby', args=[self.device.id, 'webcam']))
+        self.assertEqual(response.status_code, 400)
+
+    # -- shodan_scan -----------------------------------------------------
+
+    def test_shodan_scan_get_is_405(self):
+        response = self.client.get(reverse('shodan_scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_shodan_scan_post_queues_task_and_logs(self):
+        with mock.patch(
+            'app_kamerka.views.shodan_scan_task.delay', return_value=_FakeAsyncResult('shodan-task')
+        ) as mocked_delay:
+            response = self.client.post(reverse('shodan_scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'task_id': 'shodan-task'})
+        mocked_delay.assert_called_once_with(id=str(self.device.id))
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        self.assertEqual(AuditLog.objects.get().action, 'shodan_scan')
+
+    def test_shodan_scan_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('shodan_scan', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+    # -- whois -------------------------------------------------------------
+
+    def test_whois_get_is_405(self):
+        response = self.client.get(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_whois_post_queues_task_and_logs(self):
+        with mock.patch(
+            'app_kamerka.views.whoisxml.delay', return_value=_FakeAsyncResult('whois-task')
+        ) as mocked_delay:
+            response = self.client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'task_id': 'whois-task'})
+        mocked_delay.assert_called_once_with(id=str(self.device.id))
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        self.assertEqual(AuditLog.objects.get().action, 'whois')
+
+    def test_whois_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('whois', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+    # -- get_binaryedge_score -----------------------------------------------
+
+    def test_get_binaryedge_score_get_is_405(self):
+        response = self.client.get(reverse('get_binaryedge_score', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_get_binaryedge_score_post_queues_task_and_logs(self):
+        with mock.patch(
+            'app_kamerka.views.binary_edge_scan.delay', return_value=_FakeAsyncResult('be-task')
+        ) as mocked_delay:
+            response = self.client.post(reverse('get_binaryedge_score', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'task_id': 'be-task'})
+        mocked_delay.assert_called_once_with(id=str(self.device.id))
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        self.assertEqual(AuditLog.objects.get().action, 'binaryedge')
+
+    def test_get_binaryedge_score_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('get_binaryedge_score', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+
+class CsrfProtectionTests(TestCase):
+    """The side-effecting endpoints are now POST + CsrfViewMiddleware, so a
+    real browser POST without a valid CSRF token must be rejected. The
+    default test Client disables CSRF checks (so the AJAX-gate tests above
+    can POST freely); this class turns enforcement back on to prove the
+    protection is actually wired up, using set_device_status (no external
+    call/celery task involved) as the representative endpoint."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='csrf_tester', password='pw12345')
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
+
+    def test_post_without_csrf_token_is_rejected(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+        response = client.post(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 403)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'new')
+
+    def test_post_with_csrf_token_succeeds(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+
+        # A GET first, so Django sets the csrftoken cookie (mirroring
+        # {% csrf_token %} / @ensure_csrf_cookie on the real pages).
+        client.get(reverse('index'))
+        csrftoken = client.cookies['csrftoken'].value
+
+        response = client.post(
+            reverse('set_device_status', args=[self.device.id]),
+            {'status': 'confirmed'},
+            secure=False,
+            **AJAX_HEADER,
+            HTTP_X_CSRFTOKEN=csrftoken,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'confirmed')

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.db.models import JSONField
 
@@ -108,4 +109,42 @@ class Dnp3(models.Model):
     source = models.CharField(max_length=100)
     destination = models.CharField(max_length=100)
     control = models.CharField(max_length=100)
+
+
+class AuditLog(models.Model):
+    """Audit trail for sensitive/side-effecting operations (active scanning,
+    exploitation, third-party enrichment lookups, and triage-affecting
+    writes). Written via app_kamerka.views.record_audit() from the POST-only
+    views that perform these operations -- never mutated afterwards, and
+    read-only in the admin (see app_kamerka/admin.py)."""
+
+    ACTION_CHOICES = [
+        ('scan', 'Active scan'),
+        ('exploit', 'Exploit attempt'),
+        ('honeyscore', 'Shodan HoneyScore check'),
+        ('set_status', 'Set device status'),
+        ('update_coordinates', 'Update coordinates'),
+        ('whois', 'Whois lookup'),
+        ('shodan_scan', 'Shodan scan'),
+        ('binaryedge', 'BinaryEdge score lookup'),
+        ('nearby', 'Nearby devices search'),
+        ('notes', 'Notes update'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+    )
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES)
+    device = models.ForeignKey(Device, on_delete=models.SET_NULL, null=True, blank=True)
+    target = models.CharField(max_length=255, blank=True, default="")
+    detail = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    success = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        who = self.user_id or "anonymous"
+        return "%s by %s on %s @ %s" % (self.action, who, self.target or self.device_id, self.created_at)
 
