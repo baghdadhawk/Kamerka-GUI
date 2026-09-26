@@ -28,6 +28,7 @@ from app_kamerka.models import Device, DeviceNearby, Search, ShodanScan, BinaryE
     Whois, Bosch
 from app_kamerka.honeypot import score_device
 from app_kamerka.banner_utils import looks_like_generic_http_response
+from app_kamerka.net import PassiveClient
 
 logger = logging.getLogger(__name__)
 
@@ -768,7 +769,7 @@ def check_credits():
     try:
         be_key = keys['keys']['binaryedge']
         headers = {"X-Key": be_key}
-        req = requests.get("https://api.binaryedge.io/v2/user/subscription", headers=headers)
+        req = PassiveClient().get("https://api.binaryedge.io/v2/user/subscription", headers=headers)
         req_json = json.loads(req.content)
         keys_list.append(req_json['requests_left'])
     except Exception as e:
@@ -1403,7 +1404,7 @@ def whoisxml(id):
 
     end = "https://www.whoisxmlapi.com/whoisserver/WhoisService?apiKey=" + api_key + "&domainName=" + device1.ip + "&outputFormat=json"
 
-    req = requests.get(end)
+    req = PassiveClient().get(end)
 
     req_json = json.loads(req.content)
 

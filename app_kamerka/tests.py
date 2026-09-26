@@ -2,6 +2,7 @@ import csv
 import json
 from unittest import mock
 
+import requests
 from django.contrib.auth import get_user_model
 from django.test import TestCase, Client, override_settings
 from django.urls import reverse
@@ -9,6 +10,13 @@ from django.urls import reverse
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import score_device, HONEYPOT_THRESHOLD
 from app_kamerka.models import Device, Search
+from app_kamerka.net import (
+    ActiveClient,
+    ACTIVE_TIMEOUT,
+    PASSIVE_TIMEOUT,
+    PassiveClient,
+    ResponseTooLarge,
+)
 from app_kamerka.sightings import other_sightings
 from app_kamerka.views import is_ajax
 from kamerka import tasks
@@ -1306,3 +1314,172 @@ class ActiveOpsFeatureFlagTests(TestCase):
     def test_exploit_disabled_non_ajax_is_400(self):
         response = self.client.get(reverse('exploit', args=[self.device.id]))
         self.assertEqual(response.status_code, 400)
+
+
+def _fake_response(body=b'{}', status_code=200, chunk_size=8):
+    """Build a real requests.Response with a canned body.
+
+    iter_content() streams the body back in chunks (as PassiveClient's size
+    guard expects), while .content/.text/.json() also work directly for
+    tests that use this response standalone, without going through the
+    size guard at all.
+    """
+    resp = requests.Response()
+    resp.status_code = status_code
+    resp._content = body
+    resp._content_consumed = False
+    resp.raw = mock.Mock(close=mock.Mock())
+
+    def _iter_content(chunk_size=None, decode_unicode=False):
+        for i in range(0, len(body), 8):
+            yield body[i:i + 8]
+
+    resp.iter_content = _iter_content
+    return resp
+
+
+class NetModuleTests(TestCase):
+    """Unit tests for the shared HTTP safety layer (app_kamerka.net). No
+    real network calls are made anywhere in this class."""
+
+    def setUp(self):
+        sleep_patcher = mock.patch('app_kamerka.net.time.sleep')
+        sleep_patcher.start()
+        self.addCleanup(sleep_patcher.stop)
+
+    def test_passive_client_sets_timeout_and_user_agent(self):
+        client = PassiveClient()
+        with mock.patch.object(client.session, 'request', return_value=_fake_response()) as mocked:
+            client.get('https://example.invalid/api')
+
+        self.assertEqual(mocked.call_count, 1)
+        _, kwargs = mocked.call_args
+        self.assertEqual(kwargs['timeout'], PASSIVE_TIMEOUT)
+        self.assertEqual(kwargs['headers']['User-Agent'], client.user_agent)
+        self.assertTrue(kwargs['verify'])
+
+    def test_passive_client_retries_transient_error_then_succeeds(self):
+        client = PassiveClient()
+        good_response = _fake_response(b'{"ok": true}')
+        with mock.patch.object(
+            client.session,
+            'request',
+            side_effect=[requests.exceptions.ConnectionError('reset'), good_response],
+        ) as mocked:
+            response = client.get('https://example.invalid/api')
+
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(response.content, b'{"ok": true}')
+
+    def test_passive_client_raises_after_exhausting_retries(self):
+        client = PassiveClient(max_retries=1)
+        with mock.patch.object(
+            client.session,
+            'request',
+            side_effect=requests.exceptions.ConnectionError('down'),
+        ) as mocked:
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                client.get('https://example.invalid/api')
+
+        # Initial attempt + 1 retry = 2 calls, then it gives up.
+        self.assertEqual(mocked.call_count, 2)
+
+    def test_passive_client_size_guard_rejects_oversized_response(self):
+        client = PassiveClient(max_response_bytes=16)
+        oversized = _fake_response(b'x' * 1024)
+        with mock.patch.object(client.session, 'request', return_value=oversized):
+            with self.assertRaises(ResponseTooLarge):
+                client.get('https://example.invalid/big')
+
+    def test_active_client_sets_short_timeout_and_user_agent_and_no_retry(self):
+        client = ActiveClient()
+        with mock.patch('app_kamerka.net.requests.request', return_value=_fake_response()) as mocked:
+            client.get('http://10.0.0.5:80/status')
+
+        self.assertEqual(mocked.call_count, 1)
+        _, kwargs = mocked.call_args
+        self.assertEqual(kwargs['timeout'], ACTIVE_TIMEOUT)
+        self.assertEqual(kwargs['headers']['User-Agent'], client.user_agent)
+        self.assertTrue(kwargs['verify'])
+
+    def test_active_client_does_not_retry_on_error(self):
+        client = ActiveClient()
+        with mock.patch(
+            'app_kamerka.net.requests.request',
+            side_effect=requests.exceptions.ConnectionError('device unreachable'),
+        ) as mocked:
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                client.get('http://10.0.0.5:80/status')
+
+        # Exactly one attempt: active/target-facing calls must never be
+        # auto-retried.
+        self.assertEqual(mocked.call_count, 1)
+
+    def test_active_client_honors_explicit_verify_false(self):
+        client = ActiveClient()
+        with mock.patch('app_kamerka.net.requests.request', return_value=_fake_response()) as mocked:
+            client.post('https://10.0.0.5:443/cgi', data='action=getInfo', verify=False)
+
+        _, kwargs = mocked.call_args
+        self.assertFalse(kwargs['verify'])
+        self.assertEqual(kwargs['timeout'], ACTIVE_TIMEOUT)
+
+    def test_active_client_verify_defaults_true(self):
+        client = ActiveClient()
+        with mock.patch('app_kamerka.net.requests.request', return_value=_fake_response()) as mocked:
+            client.get('https://10.0.0.5:443/deviceIP')
+
+        _, kwargs = mocked.call_args
+        self.assertTrue(kwargs['verify'])
+
+
+class PassiveCallSitesUseSharedClientTests(TestCase):
+    """Regression: BinaryEdge and WhoisXML lookups in kamerka.tasks must go
+    through the shared PassiveClient (timeouts, retries, UA), not a bare
+    `requests.get(...)`."""
+
+    def _patch_shodan_info(self):
+        class FakeShodanClient:
+            def __init__(self, api_key):
+                pass
+
+            def info(self):
+                return {'query_credits': 111}
+
+        patcher = mock.patch.object(tasks, 'Shodan', FakeShodanClient)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_check_credits_uses_passive_client_for_binaryedge(self):
+        self._patch_shodan_info()
+        fake_client = mock.Mock()
+        fake_client.get.return_value = _fake_response(json.dumps({'requests_left': 42}).encode())
+
+        with mock.patch.object(tasks, 'PassiveClient', return_value=fake_client) as mocked_cls:
+            credits = tasks.check_credits()
+
+        mocked_cls.assert_called_once_with()
+        self.assertTrue(fake_client.get.called)
+        called_url = fake_client.get.call_args[0][0]
+        self.assertIn('binaryedge.io', called_url)
+        self.assertIn(111, credits)
+        self.assertIn(42, credits)
+
+    def test_whoisxml_uses_passive_client(self):
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        device = Device.objects.create(search=search, ip='8.8.8.8', port='80')
+        fake_client = mock.Mock()
+        fake_body = {
+            'WhoisRecord': {
+                'registryData': {},
+            }
+        }
+        fake_client.get.return_value = _fake_response(json.dumps(fake_body).encode())
+
+        with mock.patch.object(tasks, 'PassiveClient', return_value=fake_client) as mocked_cls:
+            tasks.whoisxml(device.id)
+
+        mocked_cls.assert_called_once_with()
+        self.assertTrue(fake_client.get.called)
+        called_url = fake_client.get.call_args[0][0]
+        self.assertIn('whoisxmlapi.com', called_url)
