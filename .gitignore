@@ -27,3 +27,7 @@ keys.json
 .vscode/
 *.swp
 .DS_Store
+
+# Throwaway virtualenvs created by tooling in the repo root
+/v/
+/venv*/
