@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.db.models import JSONField
 
@@ -7,8 +8,8 @@ from django.db.models import JSONField
 class Search(models.Model):
     coordinates = models.CharField(max_length=100)
     country = models.CharField(max_length=100)
-    ics = models.CharField(max_length=100)
-    coordinates_search = models.CharField(max_length=1000)
+    ics = JSONField(default=list)
+    coordinates_search = JSONField(default=list)
     nmap = models.BooleanField(default=False)
 
 class Device(models.Model):
@@ -35,14 +36,14 @@ class Device(models.Model):
     country_code = models.CharField(max_length=100, default="")
     query = models.CharField(max_length=100, default="")
     category = models.CharField(max_length=100, default="")
-    vulns = models.CharField(max_length=100, default="")
-    indicator = models.CharField(max_length=100, default="")
-    hostnames = models.CharField(max_length=100, default="")
+    vulns = JSONField(default=list)
+    indicator = JSONField(default=list)
+    hostnames = JSONField(default=list)
     screenshot = models.CharField(max_length=100000, default="")
     located = models.BooleanField(default=False, null=True)
     notes = models.CharField(max_length=1000, default="")
-    scan = models.CharField(max_length=100000, default="")
-    exploit = models.CharField(max_length=10000, default="")
+    scan = JSONField(default=dict)
+    exploit = JSONField(default=dict)
     exploited_scanned = models.BooleanField(default=False)
     # Local heuristic honeypot detection (app_kamerka.honeypot.score_device),
     # computed automatically at save time, no network required.
@@ -60,6 +61,24 @@ class Device(models.Model):
     # Manual operator triage status (see STATUS_CHOICES above).
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='new')
 
+    class Meta:
+        # Capability-based roles (see app_kamerka.authz.require_capability and
+        # the Viewer/Analyst/Active Scanner/Exploit Operator/Administrator
+        # groups created by the 000x_capability_groups data migration).
+        # These are plain custom Django permissions -- not tied to any
+        # particular Device instance -- hung off this model only because
+        # every custom permission needs *some* model to live on and Device
+        # is the app's central one. A superuser holds all of them implicitly
+        # (django.contrib.auth's ModelBackend.has_perm short-circuits to True
+        # for is_superuser).
+        permissions = [
+            ('view_capability', 'Can view read-only pages and passive lookups'),
+            ('run_search', 'Can run passive Shodan searches and enrichment/triage/export'),
+            ('active_scan', 'Can run active Nmap scans'),
+            ('exploit', 'Can run exploitation modules'),
+            ('administer', 'Can administer scan scopes and users'),
+        ]
+
 class DeviceNearby(models.Model):
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
     lat = models.CharField(max_length=100)
@@ -76,7 +95,11 @@ class ShodanScan(models.Model):
     tags = models.CharField(max_length=100)
     products = models.CharField(max_length=100)
     module = models.CharField(max_length=100)
-    vulns = models.CharField(max_length=100)
+    # Was CharField(max_length=100) but callers (kamerka.tasks.shodan_scan_task)
+    # assign the raw Shodan `vulns` list here -- silently truncated (and
+    # str()-mangled) past 100 chars. See Device.vulns/indicator/hostnames
+    # for the same class of bug.
+    vulns = JSONField(default=list)
 
 
 class BinaryEdgeScore(models.Model):
@@ -108,4 +131,79 @@ class Dnp3(models.Model):
     source = models.CharField(max_length=100)
     destination = models.CharField(max_length=100)
     control = models.CharField(max_length=100)
+
+
+class ScanAuthorization(models.Model):
+    """An explicit engagement/authorization scope for ACTIVE operations
+    (Nmap scanning, exploitation). A device discovered via passive Shodan
+    search can only be scanned/exploited if its IP falls within some
+    non-expired row here with the matching allow_* flag set -- see
+    app_kamerka.authz.is_target_authorized(). Administrators create these
+    via the Django admin (see app_kamerka/admin.py)."""
+
+    name = models.CharField(max_length=200, help_text="Short label, e.g. the engagement name.")
+    reference = models.CharField(
+        max_length=200, blank=True, default="",
+        help_text="Optional reference, e.g. an incident/engagement ticket id.",
+    )
+    cidr = models.CharField(
+        max_length=100,
+        help_text="An IPv4/IPv6 network (e.g. 203.0.113.0/24) or a single host (e.g. 203.0.113.5).",
+    )
+    allow_port_scan = models.BooleanField(default=False, help_text="Authorizes active Nmap scanning.")
+    allow_exploit = models.BooleanField(default=False, help_text="Authorizes exploitation attempts.")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Leave blank for a scope that never expires.",
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return "%s (%s)" % (self.name, self.cidr)
+
+
+class AuditLog(models.Model):
+    """Audit trail for sensitive/side-effecting operations (active scanning,
+    exploitation, third-party enrichment lookups, and triage-affecting
+    writes). Written via app_kamerka.views.record_audit() from the POST-only
+    views that perform these operations -- never mutated afterwards, and
+    read-only in the admin (see app_kamerka/admin.py)."""
+
+    ACTION_CHOICES = [
+        ('scan', 'Active scan'),
+        ('exploit', 'Exploit attempt'),
+        ('honeyscore', 'Shodan HoneyScore check'),
+        ('set_status', 'Set device status'),
+        ('update_coordinates', 'Update coordinates'),
+        ('whois', 'Whois lookup'),
+        ('shodan_scan', 'Shodan scan'),
+        ('binaryedge', 'BinaryEdge score lookup'),
+        ('nearby', 'Nearby devices search'),
+        ('notes', 'Notes update'),
+        ('capability_denied', 'Capability denied'),
+        ('scope_denied', 'Target scope denied'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+    )
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES)
+    device = models.ForeignKey(Device, on_delete=models.SET_NULL, null=True, blank=True)
+    target = models.CharField(max_length=255, blank=True, default="")
+    detail = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    success = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        who = self.user_id or "anonymous"
+        return "%s by %s on %s @ %s" % (self.action, who, self.target or self.device_id, self.created_at)
 

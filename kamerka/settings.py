@@ -46,6 +46,14 @@ ALLOWED_HOSTS = [
 # since the project already enables the admin app.
 LOGIN_URL = '/admin/login/'
 
+# Active Nmap scanning and exploitation (see app_kamerka.views.scan_dev /
+# exploit_dev) reach out to and, in some cases (e.g. the Hikvision PoC),
+# mutate real third-party devices. Both are OFF by default; set
+# KAMERKA_ENABLE_ACTIVE_SCAN=1 / KAMERKA_ENABLE_EXPLOITATION=1 in the
+# environment to opt in.
+KAMERKA_ENABLE_ACTIVE_SCAN = _env_bool('KAMERKA_ENABLE_ACTIVE_SCAN', False)
+KAMERKA_ENABLE_EXPLOITATION = _env_bool('KAMERKA_ENABLE_EXPLOITATION', False)
+
 # Extra hardening that is only safe to enable once the app is served over HTTPS
 # behind a real host, i.e. when DEBUG is off.
 if not DEBUG:
@@ -67,6 +75,20 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Nairobi'
 CELERY_IMPORTS = ('kamerka.tasks',)
+# scan_task/exploit_task (active Nmap scanning and exploitation probes) are
+# pinned to a dedicated 'active' queue via @shared_task(queue='active') in
+# kamerka/tasks.py. That lets a deployment run a separate worker consuming
+# only the 'active' queue -- e.g. `celery -A kamerka worker -Q active` -- on
+# network-isolated infrastructure, while the default worker (`celery -A
+# kamerka worker -Q celery`) handles everything else (shodan_search,
+# devices_nearby, whoisxml, etc). CELERY_TASK_ROUTES is left commented out
+# below as the alternative way to assign queues (by task name, without
+# touching the decorator) in case a deployment prefers to route tasks this
+# way instead:
+# CELERY_TASK_ROUTES = {
+#     'kamerka.tasks.scan_task': {'queue': 'active'},
+#     'kamerka.tasks.exploit_task': {'queue': 'active'},
+# }
 # Celery 6 will require the worker to explicitly opt in to retrying its
 # initial broker connection on startup; set it now to silence the
 # deprecation warning under Celery 5.

@@ -1,14 +1,26 @@
 import csv
 import json
+from importlib import import_module
 from unittest import mock
 
+import requests
 from django.contrib.auth import get_user_model
-from django.test import TestCase, Client
+from django.contrib.auth.models import Group
+from django.test import TestCase, Client, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
+from app_kamerka.authz import is_target_authorized
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import score_device, HONEYPOT_THRESHOLD
-from app_kamerka.models import Device, Search
+from app_kamerka.models import AuditLog, Device, ScanAuthorization, Search
+from app_kamerka.net import (
+    ActiveClient,
+    ACTIVE_TIMEOUT,
+    PASSIVE_TIMEOUT,
+    PassiveClient,
+    ResponseTooLarge,
+)
 from app_kamerka.sightings import other_sightings
 from app_kamerka.views import is_ajax
 from kamerka import tasks
@@ -17,6 +29,32 @@ User = get_user_model()
 
 
 AJAX_HEADER = {'HTTP_X_REQUESTED_WITH': 'XMLHttpRequest'}
+
+
+def make_user(username, groups=(), password='pw12345', superuser=False):
+    """Test helper: create a user, optionally a superuser, and add it to
+    zero or more of the Viewer/Analyst/Active Scanner/Exploit Operator/
+    Administrator groups created by the 0007_capability_groups data
+    migration (so this also exercises that migration's group/permission
+    wiring, not just hand-rolled permissions)."""
+    if superuser:
+        user = User.objects.create_superuser(
+            username=username, email='%s@example.invalid' % username, password=password,
+        )
+    else:
+        user = User.objects.create_user(username=username, password=password)
+    for group_name in groups:
+        user.groups.add(Group.objects.get(name=group_name))
+    return user
+
+
+def make_authorization(cidr='0.0.0.0/0', allow_port_scan=True, allow_exploit=True,
+                        expires_at=None, name='test scope'):
+    """Test helper: create a ScanAuthorization row covering `cidr`."""
+    return ScanAuthorization.objects.create(
+        name=name, cidr=cidr, allow_port_scan=allow_port_scan, allow_exploit=allow_exploit,
+        expires_at=expires_at,
+    )
 
 
 class IsAjaxHelperTests(TestCase):
@@ -220,15 +258,15 @@ class DevicesViewFilterTests(TestCase):
 
         self.modbus_us = Device.objects.create(
             search=self.search1, ip='10.0.0.1', type='modbus', category='ics',
-            port='502', country_code='US', vulns="['CVE-2020-1111']",
+            port='502', country_code='US', vulns=['CVE-2020-1111'],
         )
         self.bacnet_de = Device.objects.create(
             search=self.search2, ip='10.0.0.2', type='bacnet', category='ics',
-            port='47808', country_code='DE', vulns="['CVE-2019-2222']",
+            port='47808', country_code='DE', vulns=['CVE-2019-2222'],
         )
         self.webcam_us = Device.objects.create(
             search=self.search1, ip='10.0.0.3', type='webcam', category='coordinates',
-            port='80', country_code='US', vulns='', org='Acme Corp',
+            port='80', country_code='US', vulns=[], org='Acme Corp',
         )
 
     def test_no_filters_returns_all(self):
@@ -360,7 +398,7 @@ class DevicePageIntelTests(TestCase):
     def test_error_banner_shows_warning_and_collapsed_raw_banner(self):
         device = Device.objects.create(
             search=self.search, ip='1.2.3.4', type='webcam', category='coordinates',
-            data='<html><body>400 Bad Request</body></html>', indicator='',
+            data='<html><body>400 Bad Request</body></html>', indicator=[],
         )
         response = self.client.get(self._device_url(device))
         self.assertEqual(response.status_code, 200)
@@ -371,7 +409,7 @@ class DevicePageIntelTests(TestCase):
     def test_normal_banner_no_warning(self):
         device = Device.objects.create(
             search=self.search, ip='1.2.3.5', type='modbus', category='ics',
-            data='Modbus TCP device banner', indicator="['default creds']",
+            data='Modbus TCP device banner', indicator=['default creds'],
         )
         response = self.client.get(self._device_url(device))
         self.assertEqual(response.status_code, 200)
@@ -484,7 +522,7 @@ class HookPreservationTests(TestCase):
         Device.objects.create(
             search=self.search, ip='10.0.0.3', type='modbus', category='ics',
             port='502', country_code='US', lat='1.0', lon='2.0',
-            vulns="['CVE-2020-0001']",
+            vulns=['CVE-2020-0001'],
         )
         response = self.client.get(reverse('index'))
         self.assertEqual(response.status_code, 200)
@@ -576,7 +614,7 @@ class HoneyscoreViewTests(TestCase):
     network involved."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.user = make_user('tester', groups=['Analyst'])
         self.client.force_login(self.user)
         search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
         self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
@@ -598,13 +636,17 @@ class HoneyscoreViewTests(TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_non_ajax_is_400(self):
-        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]))
+    def test_get_is_405(self):
+        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('get_honeyscore', args=[self.device.id]))
         self.assertEqual(response.status_code, 400)
 
     def test_ajax_stores_and_returns_float(self):
         self._patch_shodan(0.87)
-        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        response = self.client.post(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'honeyscore': 0.87})
         self.device.refresh_from_db()
@@ -612,11 +654,20 @@ class HoneyscoreViewTests(TestCase):
 
     def test_ajax_failure_stores_none(self):
         self._patch_shodan(_RAISE)
-        response = self.client.get(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        response = self.client.post(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'honeyscore': None})
         self.device.refresh_from_db()
         self.assertIsNone(self.device.honeyscore)
+
+    def test_creates_audit_log_row(self):
+        self._patch_shodan(0.5)
+        response = self.client.post(reverse('get_honeyscore', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'honeyscore')
+        self.assertEqual(row.device_id, self.device.id)
 
 
 _RAISE = object()  # sentinel telling FakeShodanClient.honeyscore to raise
@@ -747,13 +798,13 @@ class SetDeviceStatusTests(TestCase):
     mirroring the whois/get_binaryedge_score pattern."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='status_tester', password='pw12345')
+        self.user = make_user('status_tester', groups=['Analyst'])
         self.client.force_login(self.user)
         search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
         self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
 
     def test_valid_status_saves_and_returns_json(self):
-        response = self.client.get(
+        response = self.client.post(
             reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}, **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 200)
@@ -765,7 +816,7 @@ class SetDeviceStatusTests(TestCase):
         self.assertEqual(self.device.status, 'new')
 
     def test_invalid_status_is_rejected(self):
-        response = self.client.get(
+        response = self.client.post(
             reverse('set_device_status', args=[self.device.id]), {'status': 'bogus'}, **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 400)
@@ -773,11 +824,21 @@ class SetDeviceStatusTests(TestCase):
         self.assertEqual(self.device.status, 'new')
 
     def test_missing_status_is_rejected(self):
-        response = self.client.get(reverse('set_device_status', args=[self.device.id]), **AJAX_HEADER)
+        response = self.client.post(reverse('set_device_status', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 400)
 
-    def test_non_ajax_is_400(self):
+    def test_get_is_405(self):
+        # Side-effecting endpoint: GET is no longer accepted at all, even
+        # with the AJAX header.
         response = self.client.get(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 405)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'new')
+
+    def test_non_ajax_post_is_400(self):
+        response = self.client.post(
             reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}
         )
         self.assertEqual(response.status_code, 400)
@@ -791,6 +852,19 @@ class SetDeviceStatusTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.device.refresh_from_db()
         self.assertEqual(self.device.status, 'reviewed')
+
+    def test_creates_audit_log_row(self):
+        self.assertEqual(AuditLog.objects.count(), 0)
+        response = self.client.post(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'set_status')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertEqual(row.user_id, self.user.id)
+        self.assertTrue(row.success)
 
     def test_devices_view_status_filter(self):
         search = self.device.search
@@ -866,7 +940,7 @@ class ExportDevicesViewTests(TestCase):
     (they share filter_devices()), as CSV (default) or JSON."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='export_tester', password='pw12345')
+        self.user = make_user('export_tester', groups=['Analyst'])
         self.client.force_login(self.user)
 
         self.search1 = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
@@ -875,11 +949,11 @@ class ExportDevicesViewTests(TestCase):
         self.modbus_us = Device.objects.create(
             search=self.search1, ip='10.0.0.1', product='Modbus PLC', org='ACME', type='modbus',
             category='ics', port='502', country_code='US', city='NYC', lat='1.0', lon='2.0',
-            vulns="['CVE-2020-1111']", hostnames='plc.example.com', honeypot_score=10,
+            vulns=['CVE-2020-1111'], hostnames=['plc.example.com'], honeypot_score=10,
         )
         self.bacnet_de = Device.objects.create(
             search=self.search2, ip='10.0.0.2', product='BACnet Ctrl', org='OtherOrg', type='bacnet',
-            category='ics', port='47808', country_code='DE', vulns='',
+            category='ics', port='47808', country_code='DE', vulns=[],
         )
 
     def test_csv_export_default_format(self):
@@ -1164,7 +1238,7 @@ class DeviceTriagePageTests(TestCase):
     control built from Device.STATUS_CHOICES and an other-sightings list."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='triage_tester', password='pw12345')
+        self.user = make_user('triage_tester', groups=['Analyst'])
         self.client.force_login(self.user)
         self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
 
@@ -1212,7 +1286,7 @@ class DeviceTriagePageTests(TestCase):
     def test_set_device_status_updates_and_page_reflects_it(self):
         device = Device.objects.create(search=self.search, ip='3.3.3.3', type='modbus', category='ics', status='new')
 
-        response = self.client.get(
+        response = self.client.post(
             reverse('set_device_status', args=[device.id]), {'status': 'confirmed'}, **AJAX_HEADER
         )
         self.assertEqual(response.status_code, 200)
@@ -1223,3 +1297,1086 @@ class DeviceTriagePageTests(TestCase):
 
         page = self.client.get(self._device_url(device))
         self.assertContains(page, 'km-status-active" data-status="confirmed"')
+
+
+class PastebinRemovalTests(TestCase):
+    """The Pastebin "field agent" exfiltration subsystem has been removed
+    entirely. send_to_field_agent now only persists notes locally."""
+
+    def setUp(self):
+        self.user = make_user('tester', groups=['Analyst'])
+        self.client.force_login(self.user)
+
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=self.search, ip='9.9.9.9', type='modbus', category='ics')
+
+    def test_send_to_field_agent_task_no_longer_exists(self):
+        self.assertFalse(hasattr(tasks, 'send_to_field_agent_task'))
+
+    def test_pastebin_helpers_no_longer_exist(self):
+        for name in ('paste_login', 'retrieve_pastes', 'delete_paste', 'create_paste'):
+            self.assertFalse(hasattr(tasks, name), "%s should have been removed" % name)
+
+    def test_send_to_field_agent_persists_notes_and_returns_ok(self):
+        response = self.client.post(
+            reverse('send_to_field_agent', args=[self.device.id, 'some notes']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'Status': 'OK'})
+
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.notes, 'some notes')
+
+    def test_send_to_field_agent_get_is_405(self):
+        response = self.client.get(
+            reverse('send_to_field_agent', args=[self.device.id, 'notes']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 405)
+
+    def test_send_to_field_agent_non_ajax_returns_no_task_id(self):
+        response = self.client.post(reverse('send_to_field_agent', args=[self.device.id, 'notes']))
+        self.assertEqual(response.json(), {'task_id': None})
+
+    def test_send_to_field_agent_creates_audit_log_row(self):
+        response = self.client.post(
+            reverse('send_to_field_agent', args=[self.device.id, 'audited notes']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'notes')
+        self.assertEqual(row.device_id, self.device.id)
+
+
+class ActiveOpsFeatureFlagTests(TestCase):
+    """scan_dev/exploit_dev are gated behind KAMERKA_ENABLE_ACTIVE_SCAN /
+    KAMERKA_ENABLE_EXPLOITATION, both False by default. This class is only
+    about that feature-flag gate (capability and target-scope authorization
+    are covered separately by CapabilityRoleTests/TargetScopeAuthorizationTests
+    below), so the caller here is a superuser with a scope covering every
+    IPv4 address -- both the active_scan/exploit capability check and the
+    is_target_authorized() scope check are satisfied unconditionally,
+    leaving only the feature flag itself under test."""
+
+    def setUp(self):
+        self.user = make_user('tester', superuser=True)
+        self.client.force_login(self.user)
+        make_authorization(cidr='0.0.0.0/0', allow_port_scan=True, allow_exploit=True)
+
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=self.search, ip='5.5.5.5', type='modbus', category='ics')
+
+    def test_scan_disabled_by_default_returns_403_and_does_not_scan(self):
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+            response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+            self.assertEqual(response.status_code, 403)
+            self.assertIn('disabled', response.json()['Error'].lower())
+            mocked_scan.assert_not_called()
+
+    def test_exploit_disabled_by_default_returns_403_and_does_not_exploit(self):
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+            self.assertEqual(response.status_code, 403)
+            self.assertIn('disabled', response.json()['Error'].lower())
+            mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_enabled_enqueues_task_and_returns_task_id(self):
+        with mock.patch(
+            'app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')
+        ) as mocked_scan:
+            response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {'task_id': 'scan-task'})
+            mocked_scan.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_enabled_enqueues_task_and_returns_task_id(self):
+        with mock.patch(
+            'app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')
+        ) as mocked_exploit:
+            response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {'task_id': 'exploit-task'})
+            mocked_exploit.assert_called_once_with(str(self.device.id))
+
+    def test_scan_get_is_405(self):
+        response = self.client.get(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_exploit_get_is_405(self):
+        response = self.client.get(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_scan_disabled_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('scan', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+    def test_exploit_disabled_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('exploit', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_creates_audit_log_row(self):
+        with mock.patch(
+            'app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')
+        ):
+            response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'scan')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertTrue(row.success)
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_creates_audit_log_row(self):
+        with mock.patch(
+            'app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')
+        ):
+            response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'exploit')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertTrue(row.success)
+
+    def test_scan_disabled_by_config_is_audited_as_failure(self):
+        # A capable caller whose active-scan attempt is refused purely because
+        # the feature flag is off must still leave an audit trail (the denial
+        # is recorded before the 403 returns), same as capability/scope denials.
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+            response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'scan')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertFalse(row.success)
+
+    def test_exploit_disabled_by_config_is_audited_as_failure(self):
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'exploit')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertFalse(row.success)
+
+
+class CapabilityGroupMigrationTests(TestCase):
+    """0007_capability_groups must actually create the five groups with the
+    right cumulative custom permissions (app_kamerka.<capability> on the
+    Device content type -- see Device.Meta.permissions)."""
+
+    def test_groups_exist_with_cumulative_permissions(self):
+        expected = {
+            'Viewer': {'view_capability'},
+            'Analyst': {'view_capability', 'run_search'},
+            'Active Scanner': {'view_capability', 'run_search', 'active_scan'},
+            'Exploit Operator': {'view_capability', 'run_search', 'active_scan', 'exploit'},
+            'Administrator': {'view_capability', 'run_search', 'active_scan', 'exploit', 'administer'},
+        }
+        for group_name, expected_codenames in expected.items():
+            group = Group.objects.get(name=group_name)
+            codenames = {p.codename for p in group.permissions.all()}
+            self.assertEqual(codenames, expected_codenames, group_name)
+
+
+class CapabilityRoleTests(TestCase):
+    """Capability-based role enforcement (S4): a Viewer can only reach the
+    read-only pages, an Analyst additionally reaches run_search/enrichment
+    endpoints, an Active Scanner additionally reaches scan_dev (given an
+    authorized scope), an Exploit Operator additionally reaches exploit_dev
+    (given an authorized scope), and a superuser passes every check
+    regardless of group membership."""
+
+    def setUp(self):
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=self.search, ip='6.6.6.6', type='modbus', category='ics')
+        # Covers the device's IP for both active operations, so the
+        # capability checks in this class are exercised independently of
+        # target-scope authorization (that is TargetScopeAuthorizationTests'
+        # job).
+        make_authorization(cidr='6.6.6.6/32', allow_port_scan=True, allow_exploit=True)
+
+    def _login(self, username, groups=(), superuser=False):
+        user = make_user(username, groups=groups, superuser=superuser)
+        client = Client()
+        client.force_login(user)
+        return client
+
+    # -- read-only pages: every authenticated user, capability or not ------
+
+    def test_plain_authenticated_user_can_read_pages(self):
+        # Login middleware already requires authentication for every page;
+        # "view" is not gated behind a group, per spec every authenticated
+        # user effectively has it.
+        client = self._login('plain_user')
+        for name, args in (
+            ('index', []), ('devices', []), ('results', [self.search.id]),
+            ('map', []), ('gallery', []), ('history', []), ('sources', []),
+            ('device', [self.device.search_id, self.device.id, self.device.ip]),
+        ):
+            response = client.get(reverse(name, args=args))
+            self.assertEqual(response.status_code, 200, name)
+
+    def test_viewer_gets_200_on_read_pages(self):
+        client = self._login('viewer_user', groups=['Viewer'])
+        response = client.get(reverse('devices'))
+        self.assertEqual(response.status_code, 200)
+        response = client.get(reverse('device', args=[self.device.search_id, self.device.id, self.device.ip]))
+        self.assertEqual(response.status_code, 200)
+
+    # -- Viewer: 403 on run_search/active_scan/exploit ----------------------
+
+    def test_viewer_gets_403_on_run_search_endpoint(self):
+        client = self._login('viewer2', groups=['Viewer'])
+        response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+
+    def test_viewer_gets_403_on_export_devices(self):
+        client = self._login('viewer3', groups=['Viewer'])
+        response = client.get(reverse('export_devices'))
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_viewer_gets_403_on_active_scan_endpoint(self):
+        client = self._login('viewer4', groups=['Viewer'])
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_viewer_gets_403_on_exploit_endpoint(self):
+        client = self._login('viewer5', groups=['Viewer'])
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    # -- Analyst: run_search/enrichment ok, scan/exploit still 403 ---------
+
+    def test_analyst_can_run_search_and_enrichment(self):
+        client = self._login('analyst1', groups=['Analyst'])
+        with mock.patch('app_kamerka.views.whoisxml.delay', return_value=mock.Mock(id='t1')):
+            response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+
+        response = client.get(reverse('export_devices'))
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_analyst_gets_403_on_active_scan(self):
+        client = self._login('analyst2', groups=['Analyst'])
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_analyst_gets_403_on_exploit(self):
+        client = self._login('analyst3', groups=['Analyst'])
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    # -- Active Scanner: can scan (with scope), not exploit -----------------
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_active_scanner_can_scan_with_scope(self):
+        client = self._login('scanner1', groups=['Active Scanner'])
+        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_scan.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_active_scanner_gets_403_on_exploit(self):
+        client = self._login('scanner2', groups=['Active Scanner'])
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    # -- Exploit Operator: can exploit (with scope) --------------------------
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_operator_can_exploit_with_scope(self):
+        client = self._login('exploiter1', groups=['Exploit Operator'])
+        with mock.patch('app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')) as mocked_exploit:
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_exploit.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_exploit_operator_can_also_scan_with_scope(self):
+        # Exploit Operator is cumulative: it also holds active_scan.
+        client = self._login('exploiter2', groups=['Exploit Operator'])
+        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_scan.assert_called_once_with(str(self.device.id))
+
+    # -- superuser: passes every check regardless of group ------------------
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True, KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_superuser_passes_all_capability_checks(self):
+        client = self._login('root_user', superuser=True)
+
+        response = client.get(reverse('export_devices'))
+        self.assertEqual(response.status_code, 200)
+
+        with mock.patch('app_kamerka.views.whoisxml.delay', return_value=mock.Mock(id='t2')):
+            response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+
+        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')):
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+
+        with mock.patch('app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')):
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+
+    def test_capability_denial_creates_audit_log_row(self):
+        client = self._login('viewer6', groups=['Viewer'])
+        response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'capability_denied')
+        self.assertFalse(row.success)
+
+
+class TargetScopeAuthorizationTests(TestCase):
+    """Target-scope authorization (S4): active_scan/exploit capability
+    alone is not enough for scan_dev/exploit_dev -- the device's IP must
+    also fall within a non-expired ScanAuthorization row with the matching
+    allow_* flag."""
+
+    def setUp(self):
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=self.search, ip='203.0.113.7', type='modbus', category='ics')
+
+        self.scanner = make_user('scoped_scanner', groups=['Active Scanner'])
+        self.exploiter = make_user('scoped_exploiter', groups=['Exploit Operator'])
+        self.scanner_client = Client()
+        self.scanner_client.force_login(self.scanner)
+        self.exploiter_client = Client()
+        self.exploiter_client.force_login(self.exploiter)
+
+    # -- is_target_authorized() unit-level checks ---------------------------
+
+    def test_is_target_authorized_true_for_in_scope_ip(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
+        self.assertTrue(is_target_authorized('203.0.113.7', 'port_scan'))
+        self.assertFalse(is_target_authorized('203.0.113.7', 'exploit'))
+
+    def test_is_target_authorized_false_for_out_of_scope_ip(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=True)
+        self.assertFalse(is_target_authorized('198.51.100.7', 'port_scan'))
+
+    def test_is_target_authorized_false_when_expired(self):
+        make_authorization(
+            cidr='203.0.113.0/24', allow_port_scan=True,
+            expires_at=timezone.now() - timezone.timedelta(days=1),
+        )
+        self.assertFalse(is_target_authorized('203.0.113.7', 'port_scan'))
+
+    def test_is_target_authorized_true_when_expires_in_future(self):
+        make_authorization(
+            cidr='203.0.113.0/24', allow_port_scan=True,
+            expires_at=timezone.now() + timezone.timedelta(days=1),
+        )
+        self.assertTrue(is_target_authorized('203.0.113.7', 'port_scan'))
+
+    def test_is_target_authorized_false_without_any_scope(self):
+        self.assertFalse(is_target_authorized('203.0.113.7', 'port_scan'))
+
+    # -- scan_dev end-to-end --------------------------------------------------
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_denied_with_no_authorization(self):
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('scope', response.json()['Error'].lower())
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_succeeds_with_in_scope_authorization(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
+        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_scan.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_denied_when_authorization_expired(self):
+        make_authorization(
+            cidr='203.0.113.0/24', allow_port_scan=True,
+            expires_at=timezone.now() - timezone.timedelta(minutes=1),
+        )
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_denied_when_authorization_lacks_port_scan_flag(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=False, allow_exploit=True)
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_denied_when_ip_outside_cidr(self):
+        make_authorization(cidr='198.51.100.0/24', allow_port_scan=True, allow_exploit=True)
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_scope_denial_creates_audit_log_row(self):
+        response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'scope_denied')
+        self.assertFalse(row.success)
+        self.assertEqual(row.device_id, self.device.id)
+
+    # -- exploit_dev end-to-end -----------------------------------------------
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_denied_with_no_authorization(self):
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('scope', response.json()['Error'].lower())
+        mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_succeeds_with_in_scope_authorization(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=False, allow_exploit=True)
+        with mock.patch('app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')) as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_exploit.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_denied_when_authorization_expired(self):
+        make_authorization(
+            cidr='203.0.113.0/24', allow_exploit=True,
+            expires_at=timezone.now() - timezone.timedelta(minutes=1),
+        )
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_denied_when_authorization_lacks_exploit_flag(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_denied_when_ip_outside_cidr(self):
+        make_authorization(cidr='198.51.100.0/24', allow_port_scan=True, allow_exploit=True)
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_scope_denial_creates_audit_log_row(self):
+        response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'scope_denied')
+        self.assertFalse(row.success)
+        self.assertEqual(row.device_id, self.device.id)
+
+
+def _fake_response(body=b'{}', status_code=200, chunk_size=8):
+    """Build a real requests.Response with a canned body.
+
+    iter_content() streams the body back in chunks (as PassiveClient's size
+    guard expects), while .content/.text/.json() also work directly for
+    tests that use this response standalone, without going through the
+    size guard at all.
+    """
+    resp = requests.Response()
+    resp.status_code = status_code
+    resp._content = body
+    resp._content_consumed = False
+    resp.raw = mock.Mock(close=mock.Mock())
+
+    def _iter_content(chunk_size=None, decode_unicode=False):
+        for i in range(0, len(body), 8):
+            yield body[i:i + 8]
+
+    resp.iter_content = _iter_content
+    return resp
+
+
+class NetModuleTests(TestCase):
+    """Unit tests for the shared HTTP safety layer (app_kamerka.net). No
+    real network calls are made anywhere in this class."""
+
+    def setUp(self):
+        sleep_patcher = mock.patch('app_kamerka.net.time.sleep')
+        sleep_patcher.start()
+        self.addCleanup(sleep_patcher.stop)
+
+    def test_passive_client_sets_timeout_and_user_agent(self):
+        client = PassiveClient()
+        with mock.patch.object(client.session, 'request', return_value=_fake_response()) as mocked:
+            client.get('https://example.invalid/api')
+
+        self.assertEqual(mocked.call_count, 1)
+        _, kwargs = mocked.call_args
+        self.assertEqual(kwargs['timeout'], PASSIVE_TIMEOUT)
+        self.assertEqual(kwargs['headers']['User-Agent'], client.user_agent)
+        self.assertTrue(kwargs['verify'])
+
+    def test_passive_client_retries_transient_error_then_succeeds(self):
+        client = PassiveClient()
+        good_response = _fake_response(b'{"ok": true}')
+        with mock.patch.object(
+            client.session,
+            'request',
+            side_effect=[requests.exceptions.ConnectionError('reset'), good_response],
+        ) as mocked:
+            response = client.get('https://example.invalid/api')
+
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(response.content, b'{"ok": true}')
+
+    def test_passive_client_raises_after_exhausting_retries(self):
+        client = PassiveClient(max_retries=1)
+        with mock.patch.object(
+            client.session,
+            'request',
+            side_effect=requests.exceptions.ConnectionError('down'),
+        ) as mocked:
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                client.get('https://example.invalid/api')
+
+        # Initial attempt + 1 retry = 2 calls, then it gives up.
+        self.assertEqual(mocked.call_count, 2)
+
+    def test_passive_client_size_guard_rejects_oversized_response(self):
+        client = PassiveClient(max_response_bytes=16)
+        oversized = _fake_response(b'x' * 1024)
+        with mock.patch.object(client.session, 'request', return_value=oversized):
+            with self.assertRaises(ResponseTooLarge):
+                client.get('https://example.invalid/big')
+
+    def test_active_client_sets_short_timeout_and_user_agent_and_no_retry(self):
+        client = ActiveClient()
+        with mock.patch('app_kamerka.net.requests.request', return_value=_fake_response()) as mocked:
+            client.get('http://10.0.0.5:80/status')
+
+        self.assertEqual(mocked.call_count, 1)
+        _, kwargs = mocked.call_args
+        self.assertEqual(kwargs['timeout'], ACTIVE_TIMEOUT)
+        self.assertEqual(kwargs['headers']['User-Agent'], client.user_agent)
+        self.assertTrue(kwargs['verify'])
+
+    def test_active_client_does_not_retry_on_error(self):
+        client = ActiveClient()
+        with mock.patch(
+            'app_kamerka.net.requests.request',
+            side_effect=requests.exceptions.ConnectionError('device unreachable'),
+        ) as mocked:
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                client.get('http://10.0.0.5:80/status')
+
+        # Exactly one attempt: active/target-facing calls must never be
+        # auto-retried.
+        self.assertEqual(mocked.call_count, 1)
+
+    def test_active_client_honors_explicit_verify_false(self):
+        client = ActiveClient()
+        with mock.patch('app_kamerka.net.requests.request', return_value=_fake_response()) as mocked:
+            client.post('https://10.0.0.5:443/cgi', data='action=getInfo', verify=False)
+
+        _, kwargs = mocked.call_args
+        self.assertFalse(kwargs['verify'])
+        self.assertEqual(kwargs['timeout'], ACTIVE_TIMEOUT)
+
+    def test_active_client_verify_defaults_true(self):
+        client = ActiveClient()
+        with mock.patch('app_kamerka.net.requests.request', return_value=_fake_response()) as mocked:
+            client.get('https://10.0.0.5:443/deviceIP')
+
+        _, kwargs = mocked.call_args
+        self.assertTrue(kwargs['verify'])
+
+
+class PassiveCallSitesUseSharedClientTests(TestCase):
+    """Regression: BinaryEdge and WhoisXML lookups in kamerka.tasks must go
+    through the shared PassiveClient (timeouts, retries, UA), not a bare
+    `requests.get(...)`."""
+
+    def _patch_shodan_info(self):
+        class FakeShodanClient:
+            def __init__(self, api_key):
+                pass
+
+            def info(self):
+                return {'query_credits': 111}
+
+        patcher = mock.patch.object(tasks, 'Shodan', FakeShodanClient)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_check_credits_uses_passive_client_for_binaryedge(self):
+        self._patch_shodan_info()
+        fake_client = mock.Mock()
+        fake_client.get.return_value = _fake_response(json.dumps({'requests_left': 42}).encode())
+
+        with mock.patch.object(tasks, 'PassiveClient', return_value=fake_client) as mocked_cls:
+            credits = tasks.check_credits()
+
+        mocked_cls.assert_called_once_with()
+        self.assertTrue(fake_client.get.called)
+        called_url = fake_client.get.call_args[0][0]
+        self.assertIn('binaryedge.io', called_url)
+        self.assertIn(111, credits)
+        self.assertIn(42, credits)
+
+    def test_whoisxml_uses_passive_client(self):
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        device = Device.objects.create(search=search, ip='8.8.8.8', port='80')
+        fake_client = mock.Mock()
+        fake_body = {
+            'WhoisRecord': {
+                'registryData': {},
+            }
+        }
+        fake_client.get.return_value = _fake_response(json.dumps(fake_body).encode())
+
+        with mock.patch.object(tasks, 'PassiveClient', return_value=fake_client) as mocked_cls:
+            tasks.whoisxml(device.id)
+
+        mocked_cls.assert_called_once_with()
+        self.assertTrue(fake_client.get.called)
+        called_url = fake_client.get.call_args[0][0]
+        self.assertIn('whoisxmlapi.com', called_url)
+
+
+class _FakeAsyncResult:
+    def __init__(self, task_id='fake-task-id'):
+        self.id = task_id
+        self.task_id = task_id
+
+
+class SideEffectingEndpointsPostOnlyTests(TestCase):
+    """update_coordinates/nearby/shodan_scan/whois/get_binaryedge_score used
+    to be GET, gated only by the is_ajax() check -- a GET is treated by
+    browsers/caches/tooling as safe and idempotent, so a mutating/
+    side-effecting operation must never be reachable that way. They are now
+    POST-only (still AJAX-gated) and CSRF-protected via Django's
+    CsrfViewMiddleware. Any celery `.delay(...)` call is mocked -- no broker
+    involved."""
+
+    def setUp(self):
+        self.user = make_user('postonly_tester', groups=['Analyst'])
+        self.client.force_login(self.user)
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(
+            search=search, ip='1.2.3.4', type='modbus', category='ics', lat='1.0', lon='2.0',
+        )
+
+    # -- update_coordinates ------------------------------------------------
+
+    def test_update_coordinates_get_is_405(self):
+        response = self.client.get(
+            reverse('update_coordinates', args=[self.device.id, '3.0,4.0']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 405)
+
+    def test_update_coordinates_post_updates_device_and_logs(self):
+        response = self.client.post(
+            reverse('update_coordinates', args=[self.device.id, '3.0,4.0']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'Status': 'OK'})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.lat, '3.0')
+        self.assertEqual(self.device.lon, '4.0')
+        self.assertTrue(self.device.located)
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'update_coordinates')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertEqual(row.target, '3.0,4.0')
+
+    def test_update_coordinates_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('update_coordinates', args=[self.device.id, '3.0,4.0']))
+        self.assertEqual(response.status_code, 400)
+
+    # -- nearby --------------------------------------------------------
+
+    def test_nearby_get_is_405(self):
+        response = self.client.get(reverse('nearby', args=[self.device.id, 'webcam']), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_nearby_post_queues_task_and_logs(self):
+        with mock.patch(
+            'app_kamerka.views.devices_nearby.delay', return_value=_FakeAsyncResult('nearby-task')
+        ) as mocked_delay:
+            response = self.client.post(reverse('nearby', args=[self.device.id, 'webcam']), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'task_id': 'nearby-task'})
+        mocked_delay.assert_called_once()
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'nearby')
+        self.assertEqual(row.target, 'webcam')
+
+    def test_nearby_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('nearby', args=[self.device.id, 'webcam']))
+        self.assertEqual(response.status_code, 400)
+
+    # -- shodan_scan -----------------------------------------------------
+
+    def test_shodan_scan_get_is_405(self):
+        response = self.client.get(reverse('shodan_scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_shodan_scan_post_queues_task_and_logs(self):
+        with mock.patch(
+            'app_kamerka.views.shodan_scan_task.delay', return_value=_FakeAsyncResult('shodan-task')
+        ) as mocked_delay:
+            response = self.client.post(reverse('shodan_scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'task_id': 'shodan-task'})
+        mocked_delay.assert_called_once_with(id=str(self.device.id))
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        self.assertEqual(AuditLog.objects.get().action, 'shodan_scan')
+
+    def test_shodan_scan_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('shodan_scan', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+    # -- whois -------------------------------------------------------------
+
+    def test_whois_get_is_405(self):
+        response = self.client.get(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_whois_post_queues_task_and_logs(self):
+        with mock.patch(
+            'app_kamerka.views.whoisxml.delay', return_value=_FakeAsyncResult('whois-task')
+        ) as mocked_delay:
+            response = self.client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'task_id': 'whois-task'})
+        mocked_delay.assert_called_once_with(id=str(self.device.id))
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        self.assertEqual(AuditLog.objects.get().action, 'whois')
+
+    def test_whois_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('whois', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+    # -- get_binaryedge_score -----------------------------------------------
+
+    def test_get_binaryedge_score_get_is_405(self):
+        response = self.client.get(reverse('get_binaryedge_score', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 405)
+
+    def test_get_binaryedge_score_post_queues_task_and_logs(self):
+        with mock.patch(
+            'app_kamerka.views.binary_edge_scan.delay', return_value=_FakeAsyncResult('be-task')
+        ) as mocked_delay:
+            response = self.client.post(reverse('get_binaryedge_score', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'task_id': 'be-task'})
+        mocked_delay.assert_called_once_with(id=str(self.device.id))
+
+        self.assertEqual(AuditLog.objects.count(), 1)
+        self.assertEqual(AuditLog.objects.get().action, 'binaryedge')
+
+    def test_get_binaryedge_score_non_ajax_post_is_400(self):
+        response = self.client.post(reverse('get_binaryedge_score', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+
+class CsrfProtectionTests(TestCase):
+    """The side-effecting endpoints are now POST + CsrfViewMiddleware, so a
+    real browser POST without a valid CSRF token must be rejected. The
+    default test Client disables CSRF checks (so the AJAX-gate tests above
+    can POST freely); this class turns enforcement back on to prove the
+    protection is actually wired up, using set_device_status (no external
+    call/celery task involved) as the representative endpoint."""
+
+    def setUp(self):
+        self.user = make_user('csrf_tester', groups=['Analyst'])
+        search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
+
+    def test_post_without_csrf_token_is_rejected(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+        response = client.post(
+            reverse('set_device_status', args=[self.device.id]), {'status': 'confirmed'}, **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 403)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'new')
+
+    def test_post_with_csrf_token_succeeds(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+
+        # A GET first, so Django sets the csrftoken cookie (mirroring
+        # {% csrf_token %} / @ensure_csrf_cookie on the real pages).
+        client.get(reverse('index'))
+        csrftoken = client.cookies['csrftoken'].value
+
+        response = client.post(
+            reverse('set_device_status', args=[self.device.id]),
+            {'status': 'confirmed'},
+            secure=False,
+            **AJAX_HEADER,
+            HTTP_X_CSRFTOKEN=csrftoken,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'confirmed')
+
+
+class JSONFieldTruncationFixTests(TestCase):
+    """Device.vulns/indicator/hostnames used to be CharField(max_length=100),
+    which silently truncated (data loss, not an error) any real CVE list,
+    indicator list, or hostnames list past 100 characters. They are now
+    JSONField, so a value of any length round-trips through the DB with no
+    truncation and no stringify/ast.literal_eval round-trip required."""
+
+    def setUp(self):
+        self.search = Search.objects.create(
+            country='US', ics='modbus', coordinates='', coordinates_search='',
+        )
+
+    def test_long_vulns_list_round_trips_without_truncation(self):
+        # 20 CVE ids, comfortably over the old 100-char CharField limit.
+        long_cves = ['CVE-2020-%04d' % i for i in range(20)]
+        self.assertGreater(len(str(long_cves)), 100)
+
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.9', type='modbus', category='ics',
+            vulns=long_cves,
+            indicator=['indicator-%d' % i for i in range(20)],
+            hostnames=['host-%d.example.com' % i for i in range(20)],
+        )
+        device.refresh_from_db()
+
+        self.assertEqual(device.vulns, long_cves)
+        self.assertEqual(len(device.vulns), 20)
+        self.assertIn('CVE-2020-0019', device.vulns)
+        self.assertIsInstance(device.vulns, list)
+        self.assertIsInstance(device.indicator, list)
+        self.assertIsInstance(device.hostnames, list)
+        self.assertEqual(len(device.indicator), 20)
+        self.assertEqual(len(device.hostnames), 20)
+
+    def test_vulns_indicator_hostnames_default_to_empty_list(self):
+        device = Device.objects.create(search=self.search, ip='10.0.0.10', type='modbus', category='ics')
+        self.assertEqual(device.vulns, [])
+        self.assertEqual(device.indicator, [])
+        self.assertEqual(device.hostnames, [])
+
+    def test_scan_and_exploit_round_trip_as_dicts(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.11', type='modbus', category='ics',
+            scan={'ID': 'nmap-script', 'Output': 'x' * 200},
+            exploit={'Reason': 'Connection error'},
+        )
+        device.refresh_from_db()
+        self.assertEqual(device.scan, {'ID': 'nmap-script', 'Output': 'x' * 200})
+        self.assertEqual(device.exploit, {'Reason': 'Connection error'})
+
+    def test_search_ics_and_coordinates_search_round_trip_as_lists(self):
+        search = Search.objects.create(
+            country='US', ics=['modbus', 'bacnet', 'siemens'], coordinates='',
+            coordinates_search=['1.0,2.0', '3.0,4.0'],
+        )
+        search.refresh_from_db()
+        self.assertEqual(search.ics, ['modbus', 'bacnet', 'siemens'])
+        self.assertEqual(search.coordinates_search, ['1.0,2.0', '3.0,4.0'])
+
+
+class LegacyJsonFieldMigrationConversionTests(TestCase):
+    """Direct tests of the conversion helpers used by the
+    0008_convert_legacy_json_string_fields data migration, which rewrite the
+    old ast.literal_eval-able CharField string values into the native
+    list/dict values now expected by the JSONField columns. Every helper
+    must never raise -- a malformed/legacy value always falls back to []
+    or {}."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        migration_module = import_module(
+            'app_kamerka.migrations.0008_convert_legacy_json_string_fields'
+        )
+        cls.parse_list_like = staticmethod(migration_module._parse_list_like)
+        cls.parse_hostnames = staticmethod(migration_module._parse_hostnames)
+        cls.parse_dict_like = staticmethod(migration_module._parse_dict_like)
+
+    def test_parse_list_like_valid_list_repr(self):
+        long_cves = ['CVE-2020-%04d' % i for i in range(20)]
+        self.assertEqual(self.parse_list_like(str(long_cves)), long_cves)
+
+    def test_parse_list_like_empty_string_is_empty_list(self):
+        self.assertEqual(self.parse_list_like(''), [])
+
+    def test_parse_list_like_malformed_string_is_empty_list(self):
+        self.assertEqual(self.parse_list_like('not a list {{{'), [])
+
+    def test_parse_list_like_non_list_repr_is_empty_list(self):
+        # A stray scalar repr (e.g. a bare number or dict) isn't a
+        # list/tuple, so it must not leak through as some other JSON type.
+        self.assertEqual(self.parse_list_like('42'), [])
+        self.assertEqual(self.parse_list_like("{'a': 1}"), [])
+
+    def test_parse_hostnames_single_value_becomes_single_item_list(self):
+        self.assertEqual(self.parse_hostnames('plc.example.com'), ['plc.example.com'])
+
+    def test_parse_hostnames_empty_is_empty_list(self):
+        self.assertEqual(self.parse_hostnames(''), [])
+
+    def test_parse_dict_like_valid_dict_repr(self):
+        self.assertEqual(
+            self.parse_dict_like(str({'ID': 'x', 'Output': 'y'})),
+            {'ID': 'x', 'Output': 'y'},
+        )
+
+    def test_parse_dict_like_empty_is_empty_dict(self):
+        self.assertEqual(self.parse_dict_like(''), {})
+
+    def test_parse_dict_like_malformed_is_empty_dict(self):
+        self.assertEqual(self.parse_dict_like('garbage((('), {})
+
+    def test_parse_dict_like_non_dict_repr_is_empty_dict(self):
+        self.assertEqual(self.parse_dict_like("['not', 'a', 'dict']"), {})
+
+
+class ScanExploitTaskTests(TestCase):
+    """Direct tests of the scan_task/exploit_task Celery task functions
+    (kamerka/tasks.py), with Nmap and the exploit probes mocked out -- no
+    real network access or nmap binary is used. These confirm the tasks
+    persist their result to the device row and return the expected dict,
+    independent of the (now async) scan_dev/exploit_dev views that enqueue
+    them -- see ActiveOpsFeatureFlagTests/TargetScopeAuthorizationTests for
+    the view-level enqueue behaviour."""
+
+    def setUp(self):
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+
+    def _fake_nmap(self, stdout):
+        instance = mock.Mock()
+        instance.is_running.return_value = False
+        instance.run_background.return_value = None
+        instance.stdout = stdout
+        return mock.Mock(return_value=instance)
+
+    def test_scan_task_plain_nmap_scan_persists_and_returns_state(self):
+        # A non-ICS device type takes the plain "-p <port>" nmap branch
+        # (no nmap_scripts/*.nse), which reports open/closed state.
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.20', port='80', type='hikvision', category='ipcam',
+        )
+        xml = (
+            b'<nmaprun><host><ports><port>'
+            b'<state state="open" reason="syn-ack"/>'
+            b'</port></ports></host></nmaprun>'
+        )
+        with mock.patch.object(tasks, 'NmapProcess', self._fake_nmap(xml)) as mocked_cls:
+            result = tasks.scan_task(device.id)
+
+        mocked_cls.assert_called_once()
+        self.assertEqual(result, {'State': 'open', 'Reason': 'syn-ack'})
+        device.refresh_from_db()
+        self.assertEqual(device.scan, {'State': 'open', 'Reason': 'syn-ack'})
+        self.assertTrue(device.exploited_scanned)
+
+    def test_scan_task_ics_nmap_script_scan_persists_and_returns_output(self):
+        # An ICS device type (modbus is in tasks.ics_scan) instead runs the
+        # matching NSE script and reports its @id/@output.
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.21', port='502', type='modbus', category='ics',
+        )
+        xml = (
+            b'<nmaprun><host><ports><port>'
+            b'<script id="modbus-discover" output="Slave ID data: 1"/>'
+            b'</port></ports></host></nmaprun>'
+        )
+        with mock.patch.object(tasks, 'NmapProcess', self._fake_nmap(xml)) as mocked_cls:
+            result = tasks.scan_task(device.id)
+
+        mocked_cls.assert_called_once()
+        self.assertEqual(result, {'ID': 'modbus-discover', 'Output': 'Slave ID data: 1'})
+        device.refresh_from_db()
+        self.assertEqual(device.scan, {'ID': 'modbus-discover', 'Output': 'Slave ID data: 1'})
+        self.assertTrue(device.exploited_scanned)
+
+    def test_scan_task_is_routed_to_the_active_queue(self):
+        self.assertEqual(tasks.scan_task.queue, 'active')
+
+    def test_exploit_task_is_routed_to_the_active_queue(self):
+        self.assertEqual(tasks.exploit_task.queue, 'active')
+
+    def test_exploit_task_unknown_type_returns_no_exploit_assigned(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.22', port='80', type='some_unhandled_type', category='ipcam',
+        )
+        result = tasks.exploit_task(device.id)
+        self.assertEqual(result, {'Reason': 'No exploit assigned'})
+
+    def test_exploit_task_dispatches_to_matching_exploit_and_persists(self):
+        # exploit_task() itself just routes by device.type to the matching
+        # app_kamerka.exploits.* probe; persistence to device.exploit
+        # happens inside that probe (see app_kamerka/exploits.py). Mock the
+        # probe (no real network/credential-guessing) but have it persist,
+        # the way the real ones do, to confirm the task's return value and
+        # the persisted row line up.
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.23', port='23', type='lutron', category='ics',
+        )
+
+        def fake_lutron(dev):
+            dev.exploit = {'Success': 'lutron config retrieved'}
+            dev.exploited_scanned = True
+            dev.save()
+            return {'Success': 'lutron config retrieved'}
+
+        with mock.patch.object(tasks.exploits, 'lutron', side_effect=fake_lutron) as mocked_lutron:
+            result = tasks.exploit_task(device.id)
+
+        mocked_lutron.assert_called_once()
+        self.assertEqual(result, {'Success': 'lutron config retrieved'})
+        device.refresh_from_db()
+        self.assertEqual(device.exploit, {'Success': 'lutron config retrieved'})
+        self.assertTrue(device.exploited_scanned)

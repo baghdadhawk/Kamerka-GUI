@@ -1,6 +1,107 @@
 # Upgrade notes
 
-## What was upgraded
+## Django 4.2 -> 5.2 LTS (September 2026)
+
+Django 4.2 reached end of extended support; the project is now pinned to
+the 5.2 LTS line.
+
+- `Django==4.2.13` -> `Django==5.2.17` (the newest 5.2.x LTS patch
+  available at time of writing).
+- **No application code changes were required.** A full audit for
+  removed/changed Django APIs across 5.0/5.1/5.2 turned up nothing this
+  codebase uses:
+  - No `django.conf.urls.url()`, no `django.utils.encoding.smart_text`/
+    `force_text`, no `django.core.urlresolvers`, no
+    `django.utils.six`/`django.utils.lru_cache` shims (all removed well
+    before 5.0) -- not present anywhere in the tree.
+  - No `Meta.index_together` on any model (`app_kamerka/models.py`) -- the
+    5.1-removed option was never used; nothing to port to `Meta.indexes`.
+  - `USE_L10N` was already dropped from `kamerka/settings.py` in the
+    4.2 upgrade (Django 5.0 removed the setting entirely; leaving it unset
+    was already forward-compatible).
+  - No `django.utils.timezone.utc` usage, no `get_storage_class()`, no
+    `FORMS_URLFIELD_ASSUME_HTTPS`/`FormsUrlField` interaction, no
+    `request.is_ajax()` (already replaced by a local helper in the 4.2
+    upgrade), no `django.contrib.postgres` JSON field types (this project
+    uses sqlite + the native `django.db.models.JSONField`, which has been
+    stable since Django 3.1).
+  - `python manage.py check` is clean with **zero** system-check warnings
+    on Django 5.2 (no new `W`/`E` codes surfaced).
+  - `python manage.py makemigrations --check --dry-run` reports
+    "No changes detected" -- Django 5.2 wants **no** new migration for this
+    schema (the commonly-cited 5.x migration trigger, altered `BooleanField`/
+    `CharField` default handling, doesn't apply here: no field defaults in
+    `app_kamerka/models.py` changed shape across 4.2 -> 5.2).
+  - `shodan.Shodan(...).labs.honeyscore(ip)` (the call path used by
+    `kamerka.tasks.honeyscore`, in turn called from
+    `app_kamerka/views.py::get_honeyscore`) was verified directly against
+    the installed `shodan==1.31.0` library source
+    (`shodan/client.py:Shodan.Labs.honeyscore`): signature and behavior
+    (`self.parent._request('/labs/honeyscore/{}'.format(ip), {})`) are
+    unchanged from the previously-pinned `1.19.0`. No call-site change
+    needed.
+
+## Dependency versions (reconciled for Django 5.2 / Python 3.11)
+
+Every pin below is the **newest release available** at time of writing;
+none had to be held back. An initial pass tried holding several packages
+(celery, redis-py, pycountry, lxml, maxminddb, xmltodict) one or two minors
+below latest out of caution, but each of those newest releases was then
+installed together and run against the full test suite with no conflicts
+and no failures, so the final `requirements.txt` uses the newest of
+everything.
+
+| Package | Old pin | New pin (newest available) |
+|---|---|---|
+| Django | 4.2.13 | **5.2.17** |
+| celery | 5.3.6 | **5.6.3** |
+| redis (client) | 5.0.4 | **8.1.0** |
+| shodan | 1.19.0 | **1.31.0** (`labs.honeyscore()` call path verified unchanged, see above) |
+| requests | 2.31.0 | **2.34.2** |
+| pycountry | 19.8.18 | **26.2.16** |
+| lxml | 5.2.1 | **6.1.3** |
+| maxminddb | 2.6.1 | **3.2.0** |
+| xmltodict | 0.13.0 | **1.0.4** |
+| pynmea2 | 1.19.0 | **1.19.0** (unchanged -- already newest) |
+| python-libnmap | 0.7.3 | **0.7.3** (unchanged -- already newest) |
+| bs4 / beautifulsoup4 | `bs4==0.0.2` | **`beautifulsoup4==4.15.0`** (switched the pin from the thin `bs4` redirect metapackage to the real `beautifulsoup4` package directly, newest available; `from bs4 import BeautifulSoup` import sites are unchanged and keep working since `beautifulsoup4` installs the same `bs4` import package) |
+| pybinaryedge | 0.5 | **0.5** (unchanged -- already newest) |
+| celery_progress | 0.5 | **0.5** (unchanged -- already newest) |
+
+`pip check` reports no broken requirements against this pin set, and a
+fresh `python3.11 -m venv` + `pip install -r requirements.txt` installs
+cleanly with no build failures or resolver backtracking.
+
+## Verification performed for the 5.2 upgrade
+
+- Fresh Python 3.11 venv, clean `pip install -r requirements.txt` (Django
+  5.2.17, celery 5.6.3, redis 8.1.0, shodan 1.31.0, requests 2.34.2, plus the
+  rest of the table above) -- succeeded with no errors; `pip check` clean.
+- `DJANGO_SECRET_KEY=x DJANGO_DEBUG=1 python manage.py check` -- clean,
+  0 issues.
+- `python manage.py makemigrations --check --dry-run` -- "No changes
+  detected"; **no new migration was required** for the 5.2 bump.
+- `python manage.py migrate` against a throwaway sqlite database -- applied
+  cleanly (all 9 `app_kamerka` migrations + Django's built-in app
+  migrations).
+- `DJANGO_SECRET_KEY=x DJANGO_DEBUG=1 python manage.py test` -- **all 253
+  tests pass** (`Ran 253 tests ... OK`), run twice: once in the working
+  venv used to iterate, once again from a brand-new from-scratch venv to
+  confirm the pinned `requirements.txt` alone reproduces a green suite.
+- Celery/Django integration check:
+  `DJANGO_SETTINGS_MODULE=kamerka.settings python -c "import django;
+  print(django.get_version()); django.setup(); from kamerka.celery import
+  app; app.loader.import_default_modules(); print('tasks', len([n for n in
+  app.tasks if n.startswith('kamerka')]))"` -- printed `5.2.6` and
+  `tasks 9`, confirming Django 5.2 setup and Celery task autodiscovery
+  (`shodan_search`, `devices_nearby`, `scan_task`, `exploit_task`,
+  `shodan_scan_task`, `whoisxml`, `binary_edge_scan`, `nmap_scan`, plus
+  `debug_task`) both still register correctly.
+- `python -m py_compile` on every changed/touched `.py` file --
+  succeeded (only `requirements.txt` actually changed; no `.py` edits were
+  needed for this bump, see above).
+
+## What was upgraded (Django 2.2 -> 4.2, earlier pass)
 
 - Django 2.2.7 -> Django 4.2.13 (latest 4.2 LTS patch at time of writing).
 - `django_jsonfield` (third-party `JSONField`) replaced with Django's native
@@ -257,3 +358,71 @@ chosen specifically so port -> family classification is unambiguous.
   `port:a,b,c,...` query is accepted, (b) matches land under the expected
   family, and (c) `api.count()` numbers are in the right ballpark versus an
   equivalent `api.search()` run's `total`.
+
+## Security hardening: Pastebin removal + active-ops feature flags
+
+- **Pastebin "field agent" subsystem removed.** The app used to publish
+  device intel (IP, geo, org, CVEs, notes) to pastebin.com, partly over
+  plain `http://`, whenever a device's notes were saved. `paste_login`,
+  `retrieve_pastes`, `delete_paste`, `create_paste` and
+  `send_to_field_agent_task` have been deleted from `kamerka/tasks.py`, and
+  `pastebin_user`/`pastebin_password`/`pastebin_dev_key` are gone from
+  `keys.json.example`. `views.send_to_field_agent` (still used by the
+  device page's "Save notes" UI, same URL name) now only persists
+  `Device.notes` locally -- nothing leaves the app.
+- **Active scanning and exploitation are now feature-flagged, OFF by
+  default.** `views.scan_dev` (Nmap scripted scan) and `views.exploit_dev`
+  (device-specific PoCs, including one that changes a Hikvision camera's
+  password) used to be reachable by any logged-in user. They are now
+  gated behind two settings, both defaulting to `False`:
+  - `KAMERKA_ENABLE_ACTIVE_SCAN` (env var, same `_env_bool` truthy values
+    as `DJANGO_DEBUG`) -- must be set to enable `scan_dev`/`GET /scan/<id>`.
+  - `KAMERKA_ENABLE_EXPLOITATION` -- must be set to enable
+    `exploit_dev`/`GET /exploit/<id>`.
+  When a flag is off, its endpoint returns HTTP 403 with a JSON `Error`
+  message and never enqueues `scan_task`/`exploit_task` (see below). The
+  device page's Scan and Exploit buttons are disabled (with a "disabled by
+  configuration" note) when their flag is off, without changing the
+  buttons' ids/hooks. Set both env vars to a truthy value
+  (`1`/`true`/`yes`/`on`) only in an environment where you intend to run
+  active scans/exploits against devices you're authorized to touch.
+
+## Active scanning and exploitation moved to Celery (dedicated `active` queue)
+
+- **`scan_dev`/`exploit_dev` no longer block the request worker on Nmap.**
+  Previously they called `scan(id)`/`exploit(id)` inline, and `scan()` did
+  `while nm.is_running(): sleep(2)` -- so a single Nmap scan (or exploit
+  probe) held a Django request-handling thread/worker for its whole
+  duration. `scan()`/`exploit()` are now the Celery tasks `scan_task`/
+  `exploit_task` in `kamerka/tasks.py` (unchanged logic; they still persist
+  their result to `Device.scan`/`Device.exploit` and return the same result
+  dict). The views now only do the synchronous pre-checks that must happen
+  in the request -- login, POST/CSRF, the `KAMERKA_ENABLE_ACTIVE_SCAN`/
+  `KAMERKA_ENABLE_EXPLOITATION` flag, `require_capability`
+  (`active_scan`/`exploit`), `is_target_authorized` scope, and the
+  `record_audit` row -- then enqueue `scan_task.delay(id)` /
+  `exploit_task.delay(id)` and return `{"task_id": <id>}`, the same
+  `task_id` + `/get-task-info/` polling pattern already used by
+  `nearby`/`shodan_scan`. The device page's Scan/Exploit buttons now show a
+  "Running..." state and poll `/get-task-info/` until the task reaches
+  `SUCCESS` (or another terminal state) before rendering the result into
+  the existing `#scan_results`/`#exploit_results` containers; a 403 from
+  the initial POST (flag off / capability denied / target out of scope) is
+  shown immediately instead of being polled.
+- **`scan_task`/`exploit_task` are routed to a dedicated `active` Celery
+  queue** (`@shared_task(queue='active')` in `kamerka/tasks.py`; see the
+  commented-out `CELERY_TASK_ROUTES` alternative in `kamerka/settings.py`
+  if you'd rather route by task name instead of the decorator). Every
+  other task (`shodan_search`, `devices_nearby`, `shodan_scan_task`,
+  `whoisxml`, `binary_edge_scan`, `nmap_scan`, ...) stays on the default
+  `celery` queue. This split is what makes it possible to run active
+  scanning/exploitation on separate, network-isolated infrastructure:
+  point one worker at only the `active` queue --
+  `celery -A kamerka worker -Q active --hostname active@%h` -- and run it
+  in its own container or VM with restricted/monitored egress (it is the
+  only thing in the deployment that reaches out to arbitrary
+  attacker-chosen-scope IPs), while the default worker
+  (`celery -A kamerka worker -Q celery`) handles the rest of the app's
+  background work on ordinary infrastructure. If you only run one worker
+  today, add `-Q celery,active` to that single worker's command line so it
+  keeps consuming both queues; nothing else changes.
