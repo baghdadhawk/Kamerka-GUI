@@ -19,8 +19,9 @@ from django.shortcuts import render
 from app_kamerka import forms
 from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryEdgeScore, Whois, \
     Bosch
+from django.conf import settings
 from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
-    binary_edge_scan, whoisxml, check_credits, send_to_field_agent_task, nmap_scan, validate_nmap, validate_maxmind, scan, \
+    binary_edge_scan, whoisxml, check_credits, nmap_scan, validate_nmap, validate_maxmind, scan, \
     exploit, build_family_selection, count_devices, honeyscore
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import HONEYPOT_THRESHOLD
@@ -789,7 +790,9 @@ def device(request, id, device_id, ip):
                "is_likely_honeypot": all_devices.honeypot_score >= HONEYPOT_THRESHOLD,
                "other_sightings": sightings,
                "sightings_count": sightings.count(),
-               "status_choices": Device.STATUS_CHOICES}
+               "status_choices": Device.STATUS_CHOICES,
+               "active_scan_enabled": settings.KAMERKA_ENABLE_ACTIVE_SCAN,
+               "exploitation_enabled": settings.KAMERKA_ENABLE_EXPLOITATION}
 
     return render(request, 'device.html', context)
 
@@ -865,6 +868,11 @@ def get_nearby_devices(request, id):
 
 def scan_dev(request, id):
     if is_ajax(request) and request.method == 'GET':
+        if not settings.KAMERKA_ENABLE_ACTIVE_SCAN:
+            return HttpResponse(
+                json.dumps({'Error': "Active scanning is disabled"}),
+                content_type='application/json', status=403,
+            )
         res = scan(id)
         if res:
             return HttpResponse(json.dumps(res), content_type='application/json')
@@ -875,6 +883,11 @@ def scan_dev(request, id):
 
 def exploit_dev(request, id):
     if is_ajax(request) and request.method == 'GET':
+        if not settings.KAMERKA_ENABLE_EXPLOITATION:
+            return HttpResponse(
+                json.dumps({'Error': "Exploitation is disabled"}),
+                content_type='application/json', status=403,
+            )
         res = exploit(id)
         if res:
             return HttpResponse(json.dumps(res), content_type='application/json')
@@ -890,14 +903,16 @@ def exploit_dev(request, id):
 get_nearby_devices_coordinates = get_nearby_devices
 
 def send_to_field_agent(request, id, notes):
+    """Persist a Device's notes locally. Kept under its original name/URL
+    since the device page's "Save notes" UI already posts here; it no
+    longer exfiltrates anything externally (the old Pastebin publishing
+    step has been removed)."""
     if is_ajax(request) and request.method == 'GET':
         logger.info("send_to_field_agent for device %s", id)
 
         host = Device.objects.get(id=id)
         host.notes = notes
         host.save()
-
-        af_task = send_to_field_agent_task.delay(id, notes)
 
         return HttpResponse(json.dumps({'Status': "OK"}), content_type='application/json')
     else:

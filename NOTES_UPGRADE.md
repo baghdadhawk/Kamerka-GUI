@@ -257,3 +257,31 @@ chosen specifically so port -> family classification is unambiguous.
   `port:a,b,c,...` query is accepted, (b) matches land under the expected
   family, and (c) `api.count()` numbers are in the right ballpark versus an
   equivalent `api.search()` run's `total`.
+
+## Security hardening: Pastebin removal + active-ops feature flags
+
+- **Pastebin "field agent" subsystem removed.** The app used to publish
+  device intel (IP, geo, org, CVEs, notes) to pastebin.com, partly over
+  plain `http://`, whenever a device's notes were saved. `paste_login`,
+  `retrieve_pastes`, `delete_paste`, `create_paste` and
+  `send_to_field_agent_task` have been deleted from `kamerka/tasks.py`, and
+  `pastebin_user`/`pastebin_password`/`pastebin_dev_key` are gone from
+  `keys.json.example`. `views.send_to_field_agent` (still used by the
+  device page's "Save notes" UI, same URL name) now only persists
+  `Device.notes` locally -- nothing leaves the app.
+- **Active scanning and exploitation are now feature-flagged, OFF by
+  default.** `views.scan_dev` (Nmap scripted scan) and `views.exploit_dev`
+  (device-specific PoCs, including one that changes a Hikvision camera's
+  password) used to be reachable by any logged-in user. They are now
+  gated behind two settings, both defaulting to `False`:
+  - `KAMERKA_ENABLE_ACTIVE_SCAN` (env var, same `_env_bool` truthy values
+    as `DJANGO_DEBUG`) -- must be set to enable `scan_dev`/`GET /scan/<id>`.
+  - `KAMERKA_ENABLE_EXPLOITATION` -- must be set to enable
+    `exploit_dev`/`GET /exploit/<id>`.
+  When a flag is off, its endpoint returns HTTP 403 with a JSON `Error`
+  message and never calls `scan()`/`exploit()`. The device page's Scan and
+  Exploit buttons are disabled (with a "disabled by configuration" note)
+  when their flag is off, without changing the buttons' ids/hooks. Set
+  both env vars to a truthy value (`1`/`true`/`yes`/`on`) only in an
+  environment where you intend to run active scans/exploits against
+  devices you're authorized to touch.

@@ -46,6 +46,14 @@ ALLOWED_HOSTS = [
 # since the project already enables the admin app.
 LOGIN_URL = '/admin/login/'
 
+# Active Nmap scanning and exploitation (see app_kamerka.views.scan_dev /
+# exploit_dev) reach out to and, in some cases (e.g. the Hikvision PoC),
+# mutate real third-party devices. Both are OFF by default; set
+# KAMERKA_ENABLE_ACTIVE_SCAN=1 / KAMERKA_ENABLE_EXPLOITATION=1 in the
+# environment to opt in.
+KAMERKA_ENABLE_ACTIVE_SCAN = _env_bool('KAMERKA_ENABLE_ACTIVE_SCAN', False)
+KAMERKA_ENABLE_EXPLOITATION = _env_bool('KAMERKA_ENABLE_EXPLOITATION', False)
+
 # Extra hardening that is only safe to enable once the app is served over HTTPS
 # behind a real host, i.e. when DEBUG is off.
 if not DEBUG:

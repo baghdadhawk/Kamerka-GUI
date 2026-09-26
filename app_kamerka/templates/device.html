@@ -166,8 +166,8 @@
         <input type="button" id="btn_update_location" class="btn btn-primary active" value="Update location" style="margin-right: 120px;" class="btn btn-info active"/>
 
 
-        <input type="text" id="notes" value=""  placeholder="Notes for field agent" style="width: 300px" />
-        <input type="button" id="btn_send_all"  class="btn btn-primary active" value="Send" class="btn btn-danger active"/>
+        <input type="text" id="notes" value=""  placeholder="Notes" style="width: 300px" />
+        <input type="button" id="btn_send_all"  class="btn btn-primary active" value="Save notes" class="btn btn-danger active"/>
 
 </center>
 
@@ -406,7 +406,14 @@
                                 </div>
                                 <div class="panel-body padding-2">
                                     <br>
+                                    {% if active_scan_enabled %}
                                     <center><button type="button" id="scan" class="btn btn-primary active">Scan {{ device.type }} </button></center>
+                                    {% else %}
+                                    <center>
+                                        <button type="button" id="scan" class="btn btn-primary active" disabled>Scan {{ device.type }} </button>
+                                        <br><small>Disabled by configuration (KAMERKA_ENABLE_ACTIVE_SCAN)</small>
+                                    </center>
+                                    {% endif %}
                                     <pre><code id=scan_results></code></pre>
 
                                     <progress id="progress-bar7" value="0" max="100" style="display:none; margin-bottom: 1em;"></progress>
@@ -429,7 +436,14 @@
                                 </div>
                                     <div class="panel-body padding-2">
                                     <br>
+                                    {% if exploitation_enabled %}
                                     <center><button type="button" id="exploit" class="btn btn-primary active"> Exploit </button></center>
+                                    {% else %}
+                                    <center>
+                                        <button type="button" id="exploit" class="btn btn-primary active" disabled> Exploit </button>
+                                        <br><small>Disabled by configuration (KAMERKA_ENABLE_EXPLOITATION)</small>
+                                    </center>
+                                    {% endif %}
                                     <pre><code id=exploit_results></code></pre>
 
                                     <progress id="progress-bar8" value="0" max="100" style="display:none; margin-bottom: 1em;"></progress>
@@ -1149,8 +1163,8 @@ console.log(response);
         });
     });
 
-    // Save notes (reuses the send_to_field_agent endpoint already used by
-    // the "Send" button on the Locate tab).
+    // Save notes (persisted locally only; reuses the send_to_field_agent
+    // endpoint already used by the "Save notes" button on the Locate tab).
     $('#save_notes').on('click', function () {
         var $btn = $(this);
         var notes = $('#device_notes_text').val() || ' ';

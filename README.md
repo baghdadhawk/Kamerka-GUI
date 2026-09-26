@@ -64,7 +64,6 @@ https://www.icscybersecurityconference.com/intelligence-gathering-on-u-s-critica
 - WHOISXMLAPI (Optional)
 - Flickr (Optional)
 - Google Maps API
-- Pastebin PRO (Optional)
 - xmltodict
 - python-libnmap
 

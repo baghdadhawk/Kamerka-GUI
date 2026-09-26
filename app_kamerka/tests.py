@@ -3,7 +3,7 @@ import json
 from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase, Client
+from django.test import TestCase, Client, override_settings
 from django.urls import reverse
 
 from app_kamerka.banner_utils import looks_like_generic_http_response
@@ -1223,3 +1223,86 @@ class DeviceTriagePageTests(TestCase):
 
         page = self.client.get(self._device_url(device))
         self.assertContains(page, 'km-status-active" data-status="confirmed"')
+
+
+class PastebinRemovalTests(TestCase):
+    """The Pastebin "field agent" exfiltration subsystem has been removed
+    entirely. send_to_field_agent now only persists notes locally."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.client.force_login(self.user)
+
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=self.search, ip='9.9.9.9', type='modbus', category='ics')
+
+    def test_send_to_field_agent_task_no_longer_exists(self):
+        self.assertFalse(hasattr(tasks, 'send_to_field_agent_task'))
+
+    def test_pastebin_helpers_no_longer_exist(self):
+        for name in ('paste_login', 'retrieve_pastes', 'delete_paste', 'create_paste'):
+            self.assertFalse(hasattr(tasks, name), "%s should have been removed" % name)
+
+    def test_send_to_field_agent_persists_notes_and_returns_ok(self):
+        response = self.client.get(
+            reverse('send_to_field_agent', args=[self.device.id, 'some notes']), **AJAX_HEADER
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'Status': 'OK'})
+
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.notes, 'some notes')
+
+    def test_send_to_field_agent_non_ajax_returns_no_task_id(self):
+        response = self.client.get(reverse('send_to_field_agent', args=[self.device.id, 'notes']))
+        self.assertEqual(response.json(), {'task_id': None})
+
+
+class ActiveOpsFeatureFlagTests(TestCase):
+    """scan_dev/exploit_dev are gated behind KAMERKA_ENABLE_ACTIVE_SCAN /
+    KAMERKA_ENABLE_EXPLOITATION, both False by default."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.client.force_login(self.user)
+
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=self.search, ip='5.5.5.5', type='modbus', category='ics')
+
+    def test_scan_disabled_by_default_returns_403_and_does_not_scan(self):
+        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+            response = self.client.get(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+            self.assertEqual(response.status_code, 403)
+            self.assertIn('disabled', response.json()['Error'].lower())
+            mocked_scan.assert_not_called()
+
+    def test_exploit_disabled_by_default_returns_403_and_does_not_exploit(self):
+        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+            response = self.client.get(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+            self.assertEqual(response.status_code, 403)
+            self.assertIn('disabled', response.json()['Error'].lower())
+            mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_enabled_calls_through_and_returns_200(self):
+        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}) as mocked_scan:
+            response = self.client.get(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {'State': 'open'})
+            mocked_scan.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_enabled_calls_through_and_returns_200(self):
+        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}) as mocked_exploit:
+            response = self.client.get(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {'Success': 'done'})
+            mocked_exploit.assert_called_once_with(str(self.device.id))
+
+    def test_scan_disabled_non_ajax_is_400(self):
+        response = self.client.get(reverse('scan', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)
+
+    def test_exploit_disabled_non_ajax_is_400(self):
+        response = self.client.get(reverse('exploit', args=[self.device.id]))
+        self.assertEqual(response.status_code, 400)

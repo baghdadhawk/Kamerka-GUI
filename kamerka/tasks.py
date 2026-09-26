@@ -22,10 +22,6 @@ from libnmap.process import NmapProcess
 from libnmap.parser import NmapParser
 import xmltodict
 
-import urllib.parse
-import urllib.request
-import xml.etree.ElementTree as et
-
 from app_kamerka import exploits
 
 from app_kamerka.models import Device, DeviceNearby, Search, ShodanScan, BinaryEdgeScore, \
@@ -1224,116 +1220,6 @@ def nmap_scan(self, file, fk):
         nmap_host_worker(host_arg=i, max_reader=max_reader, search=search)
         progress_recorder.set_progress(c + 1, total=total)
     return result
-
-
-def paste_login(username, password, key):
-    login_url = "https://pastebin.com/api/api_login.php"
-    login_payload = {"api_dev_key": key, "api_user_name": username, "api_user_password": password}
-
-    login = requests.post(login_url, data=login_payload)
-    user_key = login.text
-    return user_key
-
-
-def retrieve_pastes(key, user_key):
-    url = "http://pastebin.com/api/api_post.php"
-    paste_dict = {}
-
-    values_list = {'api_option': 'list',
-                   'api_dev_key': key,
-                   'api_user_key': user_key}
-
-    data = urllib.parse.urlencode(values_list)
-    data = data.encode('utf-8')  # data should be bytes
-    req = urllib.request.Request(url, data)
-    with urllib.request.urlopen(req) as response:
-        the_page = response.read()
-
-    key_v = ""
-    title = ""
-
-    root = et.fromstring("<root>" + str(the_page) + "</root>")
-    for paste_root in root:
-        for paste_element in paste_root:
-            key = paste_element.tag.split("_", 1)[-1]
-            if key == "key":
-                key_v = paste_element.text
-            if key == "title":
-                title = paste_element.text
-
-        paste_dict[title] = key_v
-    return paste_dict
-
-
-def delete_paste(key, user_key, paste_code):
-    url = "http://pastebin.com/api/api_post.php"
-
-    values_list = {'api_option': 'delete',
-                   'api_dev_key': key,
-                   'api_user_key': user_key,
-                   "api_paste_key": paste_code}
-
-    data = urllib.parse.urlencode(values_list)
-    data = data.encode('utf-8')  # data should be bytes
-    req = urllib.request.Request(url, data)
-    urllib.request.urlopen(req)
-
-
-def create_paste(key, user_key, filename, text):
-    url = "http://pastebin.com/api/api_post.php"
-
-    values = {'api_option': 'paste',
-              'api_dev_key': key,
-              'api_paste_code': text,
-              'api_paste_private': '2',
-              'api_paste_name': filename,
-              'api_user_key': user_key}
-
-    data = urllib.parse.urlencode(values)
-    data = data.encode('utf-8')  # data should be bytes
-    req = urllib.request.Request(url, data)
-    with urllib.request.urlopen(req) as response:
-        the_page = response.read()
-
-
-@shared_task(bind=False)
-def send_to_field_agent_task(id, notes):
-    cve = ""
-    indicator = ""
-
-    af = Device.objects.get(id=id)
-    ports = af.port
-    try:
-        af_details = ShodanScan.objects.get(device_id=id)
-        ports = af_details.ports[1:][:-1]
-        if af_details.vulns:
-            cve = af_details.vulns[1:][:-1]
-        if af.indicator:
-            indicator = af.indicator[2:][:-2]
-    except Exception:
-        logger.info("Not scanned")
-
-    user_key = paste_login(keys['keys']['pastebin_user'], keys['keys']['pastebin_password'],
-                           keys['keys']['pastebin_dev_key'])
-
-    pastes = retrieve_pastes(keys['keys']['pastebin_dev_key'], user_key=user_key)
-
-    ip = af.ip
-    lat = af.lat
-    lon = af.lon
-    org = af.org
-    type = af.type
-
-    notes = af.notes
-
-    merge_string = "ꓘ;" + lat + ";" + lon + ";" + ip + ";" + ports + ";" + org + ";" + type + ";" + cve + ";" + indicator + ";" + notes
-
-    logger.info("\\xea\\x93\\x98amerka_" + af.ip)
-    if "\\xea\\x93\\x98amerka_" + af.ip in pastes.keys():
-        delete_paste(keys['keys']['pastebin_dev_key'], user_key, pastes["\\xea\\x93\\x98amerka_" + af.ip])
-        create_paste(keys['keys']['pastebin_dev_key'], user_key, "ꓘamerka_" + af.ip, merge_string)
-    else:
-        create_paste(keys['keys']['pastebin_dev_key'], user_key, "ꓘamerka_" + af.ip, merge_string)
 
 
 @shared_task(bind=False)
