@@ -216,11 +216,11 @@
                 </div>
                 <div class="panel-body km-intel-body">
                     <div class="km-intel-fields">
-                        <b dir="auto">{{ device.hostnames }}</b>
+                        <b dir="auto">{{ device.hostnames|join:", " }}</b>
                         <span dir="auto">{{ device.product }}</span>
                         <span>{{ device.type }}</span>
                         <span dir="auto">{{ device.org }}</span>
-                        <span>{{ device.vulns|slice:"1:-1" }}</span>
+                        <span>{{ device.vulns|join:", " }}</span>
                         <span dir="auto">{{ device.city }}</span>
                     </div>
 
@@ -1103,7 +1103,7 @@ console.log(response);
             var products = val.fields.products.substring(1, val.fields.products.length-1)
                         var modules = val.fields.module.substring(1, val.fields.module.length-1)
 
-            var vulns = val.fields.vulns.substring(1, val.fields.vulns.length-1)
+            var vulns = Array.isArray(val.fields.vulns) ? val.fields.vulns.join(', ') : val.fields.vulns
 
             var tags = val.fields.tags.substring(1, val.fields.tags.length-1)
 

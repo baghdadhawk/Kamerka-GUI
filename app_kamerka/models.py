@@ -8,8 +8,8 @@ from django.db.models import JSONField
 class Search(models.Model):
     coordinates = models.CharField(max_length=100)
     country = models.CharField(max_length=100)
-    ics = models.CharField(max_length=100)
-    coordinates_search = models.CharField(max_length=1000)
+    ics = JSONField(default=list)
+    coordinates_search = JSONField(default=list)
     nmap = models.BooleanField(default=False)
 
 class Device(models.Model):
@@ -36,14 +36,14 @@ class Device(models.Model):
     country_code = models.CharField(max_length=100, default="")
     query = models.CharField(max_length=100, default="")
     category = models.CharField(max_length=100, default="")
-    vulns = models.CharField(max_length=100, default="")
-    indicator = models.CharField(max_length=100, default="")
-    hostnames = models.CharField(max_length=100, default="")
+    vulns = JSONField(default=list)
+    indicator = JSONField(default=list)
+    hostnames = JSONField(default=list)
     screenshot = models.CharField(max_length=100000, default="")
     located = models.BooleanField(default=False, null=True)
     notes = models.CharField(max_length=1000, default="")
-    scan = models.CharField(max_length=100000, default="")
-    exploit = models.CharField(max_length=10000, default="")
+    scan = JSONField(default=dict)
+    exploit = JSONField(default=dict)
     exploited_scanned = models.BooleanField(default=False)
     # Local heuristic honeypot detection (app_kamerka.honeypot.score_device),
     # computed automatically at save time, no network required.
@@ -95,7 +95,11 @@ class ShodanScan(models.Model):
     tags = models.CharField(max_length=100)
     products = models.CharField(max_length=100)
     module = models.CharField(max_length=100)
-    vulns = models.CharField(max_length=100)
+    # Was CharField(max_length=100) but callers (kamerka.tasks.shodan_scan_task)
+    # assign the raw Shodan `vulns` list here -- silently truncated (and
+    # str()-mangled) past 100 chars. See Device.vulns/indicator/hostnames
+    # for the same class of bug.
+    vulns = JSONField(default=list)
 
 
 class BinaryEdgeScore(models.Model):

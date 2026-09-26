@@ -1,4 +1,3 @@
-import ast
 import csv
 import json
 import logging
@@ -344,12 +343,12 @@ def index(request):
         .only('id', 'ip', 'type', 'org', 'country_code', 'port', 'honeypot_score', 'search_id')[:10]
     )
 
-    vulns = Device.objects.exclude(vulns__isnull=True).exclude(vulns__exact='')
+    vulns = Device.objects.exclude(vulns__isnull=True).exclude(vulns=[])
 
     vulns_list = []
 
     for i in vulns:
-        vulns_list.append(ast.literal_eval(i.vulns))
+        vulns_list.append(i.vulns)
 
     cves = []
     for i in vulns_list:
@@ -371,13 +370,8 @@ def index(request):
     for j in last_5_searches:
         try:
             j.country = pycountry.countries.get(alpha_2=j.country).name
-            j.ics = ast.literal_eval(j.ics)
         except Exception as e:
-            logger.info("index: failed to parse country/ics for search %s: %s", j.id, e)
-        try:
-            j.coordinates_search = ast.literal_eval(j.coordinates_search)
-        except Exception as e:
-            logger.info("index: failed to parse coordinates_search for search %s: %s", j.id, e)
+            logger.info("index: failed to parse country for search %s: %s", j.id, e)
 
     # NOTE: this used to call check_credits() synchronously here, which hits
     # both the Shodan and BinaryEdge APIs on every single dashboard render --
@@ -496,19 +490,15 @@ def filter_devices(request):
 
 
 def parse_cves(vulns):
-    """Safely parse a Device.vulns value (an ast.literal_eval-able string,
-    e.g. "['CVE-2020-1111']") into a plain list of CVE id strings, for the
-    devices/results tables to render as individual badges. Never raises --
-    anything that doesn't parse to a list/tuple/set just yields [].
+    """Normalize a Device.vulns value (now a native list/tuple/set, from
+    Device.vulns being a JSONField) into a plain list of CVE id strings, for
+    the devices/results tables to render as individual badges. Never raises
+    -- anything that isn't a list/tuple/set just yields [].
     """
     if not vulns:
         return []
-    try:
-        parsed = ast.literal_eval(vulns)
-    except Exception:
-        return []
-    if isinstance(parsed, (list, tuple, set)):
-        return [str(v) for v in parsed if v]
+    if isinstance(vulns, (list, tuple, set)):
+        return [str(v) for v in vulns if v]
     return []
 
 
@@ -532,10 +522,6 @@ def devices(request):
     all_devices, filters = filter_devices(request)
 
     for i in all_devices:
-        try:
-            i.indicator = ast.literal_eval(i.indicator)
-        except Exception as e:
-            logger.info("devices: failed to parse indicator for device %s: %s", i.id, e)
         i.cves = parse_cves(i.vulns)
 
     context = {
@@ -565,11 +551,11 @@ def export_devices(request):
     export_format = (request.GET.get('format') or 'csv').lower()
 
     def row_dict(device):
-        try:
-            vulns = ast.literal_eval(device.vulns) if device.vulns else []
-            vulns_str = ';'.join(vulns) if isinstance(vulns, (list, tuple, set)) else str(vulns)
-        except Exception:
-            vulns_str = device.vulns
+        vulns = device.vulns or []
+        vulns_str = ';'.join(vulns) if isinstance(vulns, (list, tuple, set)) else str(vulns)
+
+        hostnames = device.hostnames or []
+        hostnames_str = ';'.join(hostnames) if isinstance(hostnames, (list, tuple, set)) else str(hostnames)
 
         return {
             'ip': device.ip,
@@ -586,7 +572,7 @@ def export_devices(request):
             'honeypot_score': device.honeypot_score,
             'status': device.status,
             'suspected_false_positive': device.suspected_false_positive,
-            'hostnames': device.hostnames,
+            'hostnames': hostnames_str,
         }
 
     if export_format == 'json':
@@ -649,12 +635,12 @@ def results(request, id):
         i['label'] = i.pop('type')
         i['value'] = i.pop('c')
 
-    vulns = Device.objects.exclude(vulns__isnull=True).exclude(vulns__exact='')
+    vulns = Device.objects.exclude(vulns__isnull=True).exclude(vulns=[])
 
     cves_list = []
 
     for i in vulns:
-        cves_list.append(ast.literal_eval(i.vulns))
+        cves_list.append(i.vulns)
     cves = []
     for i in cves_list:
         for j in i:
@@ -668,11 +654,6 @@ def results(request, id):
     sort = sorted(cves_counter.items())[:7]
 
     for i in all_devices:
-        try:
-            i.indicator = ast.literal_eval(i.indicator)
-
-        except Exception as e:
-            logger.info("results: failed to parse indicator for device %s: %s", i.id, e)
         i.cves = parse_cves(i.vulns)
 
 
@@ -697,17 +678,6 @@ def results(request, id):
 
 def history(request):
     all_searches = Search.objects.all()
-
-    for i in all_searches:
-        try:
-            i.coordinates_search = ast.literal_eval(i.coordinates_search)
-        except Exception as e:
-            logger.info("history: failed to parse coordinates_search for search %s: %s", i.id, e)
-
-        try:
-            i.ics = ast.literal_eval(i.ics)
-        except Exception as e:
-            logger.info("history: failed to parse ics for search %s: %s", i.id, e)
 
     context = {'history': all_searches}
     return render(request, 'history.html', context)
@@ -796,10 +766,7 @@ def device(request, id, device_id, ip):
     shodan = ShodanScan.objects.filter(device_id=all_devices.id)
     google_maps_key = keys['keys']['google_maps']
 
-    try:
-        parsed_indicator = ast.literal_eval(all_devices.indicator)
-    except Exception:
-        parsed_indicator = all_devices.indicator
+    parsed_indicator = all_devices.indicator
 
     if isinstance(parsed_indicator, (list, tuple, set)):
         indicator_list = list(parsed_indicator)

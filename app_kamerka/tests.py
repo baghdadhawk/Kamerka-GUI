@@ -1,5 +1,6 @@
 import csv
 import json
+from importlib import import_module
 from unittest import mock
 
 import requests
@@ -257,15 +258,15 @@ class DevicesViewFilterTests(TestCase):
 
         self.modbus_us = Device.objects.create(
             search=self.search1, ip='10.0.0.1', type='modbus', category='ics',
-            port='502', country_code='US', vulns="['CVE-2020-1111']",
+            port='502', country_code='US', vulns=['CVE-2020-1111'],
         )
         self.bacnet_de = Device.objects.create(
             search=self.search2, ip='10.0.0.2', type='bacnet', category='ics',
-            port='47808', country_code='DE', vulns="['CVE-2019-2222']",
+            port='47808', country_code='DE', vulns=['CVE-2019-2222'],
         )
         self.webcam_us = Device.objects.create(
             search=self.search1, ip='10.0.0.3', type='webcam', category='coordinates',
-            port='80', country_code='US', vulns='', org='Acme Corp',
+            port='80', country_code='US', vulns=[], org='Acme Corp',
         )
 
     def test_no_filters_returns_all(self):
@@ -397,7 +398,7 @@ class DevicePageIntelTests(TestCase):
     def test_error_banner_shows_warning_and_collapsed_raw_banner(self):
         device = Device.objects.create(
             search=self.search, ip='1.2.3.4', type='webcam', category='coordinates',
-            data='<html><body>400 Bad Request</body></html>', indicator='',
+            data='<html><body>400 Bad Request</body></html>', indicator=[],
         )
         response = self.client.get(self._device_url(device))
         self.assertEqual(response.status_code, 200)
@@ -408,7 +409,7 @@ class DevicePageIntelTests(TestCase):
     def test_normal_banner_no_warning(self):
         device = Device.objects.create(
             search=self.search, ip='1.2.3.5', type='modbus', category='ics',
-            data='Modbus TCP device banner', indicator="['default creds']",
+            data='Modbus TCP device banner', indicator=['default creds'],
         )
         response = self.client.get(self._device_url(device))
         self.assertEqual(response.status_code, 200)
@@ -521,7 +522,7 @@ class HookPreservationTests(TestCase):
         Device.objects.create(
             search=self.search, ip='10.0.0.3', type='modbus', category='ics',
             port='502', country_code='US', lat='1.0', lon='2.0',
-            vulns="['CVE-2020-0001']",
+            vulns=['CVE-2020-0001'],
         )
         response = self.client.get(reverse('index'))
         self.assertEqual(response.status_code, 200)
@@ -948,11 +949,11 @@ class ExportDevicesViewTests(TestCase):
         self.modbus_us = Device.objects.create(
             search=self.search1, ip='10.0.0.1', product='Modbus PLC', org='ACME', type='modbus',
             category='ics', port='502', country_code='US', city='NYC', lat='1.0', lon='2.0',
-            vulns="['CVE-2020-1111']", hostnames='plc.example.com', honeypot_score=10,
+            vulns=['CVE-2020-1111'], hostnames=['plc.example.com'], honeypot_score=10,
         )
         self.bacnet_de = Device.objects.create(
             search=self.search2, ip='10.0.0.2', product='BACnet Ctrl', org='OtherOrg', type='bacnet',
-            category='ics', port='47808', country_code='DE', vulns='',
+            category='ics', port='47808', country_code='DE', vulns=[],
         )
 
     def test_csv_export_default_format(self):
@@ -2131,3 +2132,119 @@ class CsrfProtectionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.device.refresh_from_db()
         self.assertEqual(self.device.status, 'confirmed')
+
+
+class JSONFieldTruncationFixTests(TestCase):
+    """Device.vulns/indicator/hostnames used to be CharField(max_length=100),
+    which silently truncated (data loss, not an error) any real CVE list,
+    indicator list, or hostnames list past 100 characters. They are now
+    JSONField, so a value of any length round-trips through the DB with no
+    truncation and no stringify/ast.literal_eval round-trip required."""
+
+    def setUp(self):
+        self.search = Search.objects.create(
+            country='US', ics='modbus', coordinates='', coordinates_search='',
+        )
+
+    def test_long_vulns_list_round_trips_without_truncation(self):
+        # 20 CVE ids, comfortably over the old 100-char CharField limit.
+        long_cves = ['CVE-2020-%04d' % i for i in range(20)]
+        self.assertGreater(len(str(long_cves)), 100)
+
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.9', type='modbus', category='ics',
+            vulns=long_cves,
+            indicator=['indicator-%d' % i for i in range(20)],
+            hostnames=['host-%d.example.com' % i for i in range(20)],
+        )
+        device.refresh_from_db()
+
+        self.assertEqual(device.vulns, long_cves)
+        self.assertEqual(len(device.vulns), 20)
+        self.assertIn('CVE-2020-0019', device.vulns)
+        self.assertIsInstance(device.vulns, list)
+        self.assertIsInstance(device.indicator, list)
+        self.assertIsInstance(device.hostnames, list)
+        self.assertEqual(len(device.indicator), 20)
+        self.assertEqual(len(device.hostnames), 20)
+
+    def test_vulns_indicator_hostnames_default_to_empty_list(self):
+        device = Device.objects.create(search=self.search, ip='10.0.0.10', type='modbus', category='ics')
+        self.assertEqual(device.vulns, [])
+        self.assertEqual(device.indicator, [])
+        self.assertEqual(device.hostnames, [])
+
+    def test_scan_and_exploit_round_trip_as_dicts(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.11', type='modbus', category='ics',
+            scan={'ID': 'nmap-script', 'Output': 'x' * 200},
+            exploit={'Reason': 'Connection error'},
+        )
+        device.refresh_from_db()
+        self.assertEqual(device.scan, {'ID': 'nmap-script', 'Output': 'x' * 200})
+        self.assertEqual(device.exploit, {'Reason': 'Connection error'})
+
+    def test_search_ics_and_coordinates_search_round_trip_as_lists(self):
+        search = Search.objects.create(
+            country='US', ics=['modbus', 'bacnet', 'siemens'], coordinates='',
+            coordinates_search=['1.0,2.0', '3.0,4.0'],
+        )
+        search.refresh_from_db()
+        self.assertEqual(search.ics, ['modbus', 'bacnet', 'siemens'])
+        self.assertEqual(search.coordinates_search, ['1.0,2.0', '3.0,4.0'])
+
+
+class LegacyJsonFieldMigrationConversionTests(TestCase):
+    """Direct tests of the conversion helpers used by the
+    0008_convert_legacy_json_string_fields data migration, which rewrite the
+    old ast.literal_eval-able CharField string values into the native
+    list/dict values now expected by the JSONField columns. Every helper
+    must never raise -- a malformed/legacy value always falls back to []
+    or {}."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        migration_module = import_module(
+            'app_kamerka.migrations.0008_convert_legacy_json_string_fields'
+        )
+        cls.parse_list_like = staticmethod(migration_module._parse_list_like)
+        cls.parse_hostnames = staticmethod(migration_module._parse_hostnames)
+        cls.parse_dict_like = staticmethod(migration_module._parse_dict_like)
+
+    def test_parse_list_like_valid_list_repr(self):
+        long_cves = ['CVE-2020-%04d' % i for i in range(20)]
+        self.assertEqual(self.parse_list_like(str(long_cves)), long_cves)
+
+    def test_parse_list_like_empty_string_is_empty_list(self):
+        self.assertEqual(self.parse_list_like(''), [])
+
+    def test_parse_list_like_malformed_string_is_empty_list(self):
+        self.assertEqual(self.parse_list_like('not a list {{{'), [])
+
+    def test_parse_list_like_non_list_repr_is_empty_list(self):
+        # A stray scalar repr (e.g. a bare number or dict) isn't a
+        # list/tuple, so it must not leak through as some other JSON type.
+        self.assertEqual(self.parse_list_like('42'), [])
+        self.assertEqual(self.parse_list_like("{'a': 1}"), [])
+
+    def test_parse_hostnames_single_value_becomes_single_item_list(self):
+        self.assertEqual(self.parse_hostnames('plc.example.com'), ['plc.example.com'])
+
+    def test_parse_hostnames_empty_is_empty_list(self):
+        self.assertEqual(self.parse_hostnames(''), [])
+
+    def test_parse_dict_like_valid_dict_repr(self):
+        self.assertEqual(
+            self.parse_dict_like(str({'ID': 'x', 'Output': 'y'})),
+            {'ID': 'x', 'Output': 'y'},
+        )
+
+    def test_parse_dict_like_empty_is_empty_dict(self):
+        self.assertEqual(self.parse_dict_like(''), {})
+
+    def test_parse_dict_like_malformed_is_empty_dict(self):
+        self.assertEqual(self.parse_dict_like('garbage((('), {})
+
+    def test_parse_dict_like_non_dict_repr_is_empty_dict(self):
+        self.assertEqual(self.parse_dict_like("['not', 'a', 'dict']"), {})

@@ -838,17 +838,20 @@ def _save_device_from_result(search, result, search_type, category, query):
     if 'vulns' in result:
         vulns = [*result['vulns']]
     else:
-        vulns = ""
+        vulns = []
 
     if result['location']['city'] is not None:
         city = result['location']['city']
 
-    hostnames = ""
+    hostnames = []
     try:
-        if 'hostnames' in result:
-            hostnames = result['hostnames'][0]
+        hostnames = list(result.get('hostnames', []))
     except Exception:
-        pass
+        hostnames = []
+    # score_device's cloud-provider heuristic does a case-insensitive
+    # substring match against hostnames, so it still wants a single string
+    # -- join every hostname rather than only ever seeing the first one.
+    hostnames_text = " ".join(hostnames)
 
     try:
         if 'SAILOR' in result['http']['title']:
@@ -982,7 +985,7 @@ def _save_device_from_result(search, result, search_type, category, query):
     try:
         honeypot_score, honeypot_reasons = score_device(
             data=result.get('data', ''), product=product, org=result.get('org', ''),
-            hostnames=hostnames, port=result.get('port'), category=category,
+            hostnames=hostnames_text, port=result.get('port'), category=category,
             ip=result.get('ip_str'), type=search_type,
         )
         device.honeypot_score = honeypot_score
@@ -1195,7 +1198,7 @@ def nmap_host_worker(host_arg, max_reader, search):
                     data="", port=ports_string, type="NMAP", city="NMAP",
                     lat=a['location']['latitude'], lon=a['location']['longitude'],
                     country_code=a['country']['iso_code'], query="NMAP SCAN", category="NMAP",
-                    vulns="", indicator="", hostnames=hostname, screenshot="")
+                    vulns=[], indicator=[], hostnames=[hostname] if hostname else [], screenshot="")
     device.save()
 
 
