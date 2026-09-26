@@ -1442,6 +1442,31 @@ class ActiveOpsFeatureFlagTests(TestCase):
         self.assertEqual(row.device_id, self.device.id)
         self.assertTrue(row.success)
 
+    def test_scan_disabled_by_config_is_audited_as_failure(self):
+        # A capable caller whose active-scan attempt is refused purely because
+        # the feature flag is off must still leave an audit trail (the denial
+        # is recorded before the 403 returns), same as capability/scope denials.
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+            response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'scan')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertFalse(row.success)
+
+    def test_exploit_disabled_by_config_is_audited_as_failure(self):
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
+            response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'exploit')
+        self.assertEqual(row.device_id, self.device.id)
+        self.assertFalse(row.success)
+
 
 class CapabilityGroupMigrationTests(TestCase):
     """0007_capability_groups must actually create the five groups with the

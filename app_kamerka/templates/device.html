@@ -1072,33 +1072,6 @@ function get_task_info(task_id,pgrbar) {
         });
     }
 
-$('#bosch_show').on('click', function(){
-var x = document.getElementById("bosch_results");
-if (x.style.display === "none") {
-    x.style.display = "block";
-  } else {
-    x.style.display = "none";
-  } if(x.innerHTML == ""){
-        $.ajax({
-            url: "/show_bosch_usernames/{{device.id}}",
-            type: "get",
-            success: function(response) {
-            $.each(response, function(key, val) {
-              $.each(val.fields, function(fieldname, field) {
-                 // response is form in html format
-                 if (fieldname=="device"){ {} }
-                 else {
-                 $("#bosch_results").append("<p><b>" + fieldname + ' </b><br> ' + field + " </p>");
-}
-            }  );$("#bosch_results").append('------------------');
-
-              }
-              )
-            }
-        })
-        }
-  });
-
 $('#show_nearby_devices').on('click', function(){
 var x = document.getElementById("nearby_devices_result");
 if (x.style.display === "none") {

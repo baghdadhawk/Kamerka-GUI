@@ -4,10 +4,8 @@ import math
 import re
 
 import maxminddb
-from libnmap.parser import NmapParser
 import os
 from time import sleep
-import requests
 from celery import shared_task, current_task
 from celery_progress.backend import ProgressRecorder
 from pybinaryedge import BinaryEdge
@@ -20,7 +18,6 @@ import xmltodict
 
 from libnmap.process import NmapProcess
 from libnmap.parser import NmapParser
-import xmltodict
 
 from app_kamerka import exploits
 

@@ -37,5 +37,4 @@ urlpatterns = [
     path('set_device_status/<id>', views.set_device_status, name="set_device_status"),
     path('scan/<id>', views.scan_dev, name="scan"),
     path('exploit/<id>', views.exploit_dev, name="exploit"),
-    # path('show_bosch_usernames/<id>', views.show_bosch_usernames, name="show_bosch_usernames"),
 ]

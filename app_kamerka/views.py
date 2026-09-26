@@ -4,7 +4,6 @@ import logging
 import os
 from collections import Counter
 from urllib.parse import urlencode
-import requests
 from django.core.files.storage import FileSystemStorage
 from .forms import UploadFileForm
 import pycountry
@@ -928,6 +927,10 @@ def scan_dev(request, id):
         return method_not_allowed()
     if is_ajax(request):
         if not settings.KAMERKA_ENABLE_ACTIVE_SCAN:
+            record_audit(
+                request, 'scan', device=_get_device_or_none(id), target=str(id),
+                detail='active scanning disabled by configuration', success=False,
+            )
             return HttpResponse(
                 json.dumps({'Error': "Active scanning is disabled"}),
                 content_type='application/json', status=403,
@@ -956,6 +959,10 @@ def exploit_dev(request, id):
         return method_not_allowed()
     if is_ajax(request):
         if not settings.KAMERKA_ENABLE_EXPLOITATION:
+            record_audit(
+                request, 'exploit', device=_get_device_or_none(id), target=str(id),
+                detail='exploitation disabled by configuration', success=False,
+            )
             return HttpResponse(
                 json.dumps({'Error': "Exploitation is disabled"}),
                 content_type='application/json', status=403,
