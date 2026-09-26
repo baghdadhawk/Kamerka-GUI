@@ -29,18 +29,6 @@
                         <a href="/">ꓘamerka</a>
                         <a href="#" class="x-navigation-control"></a>
                     </li>
-                    <li class="xn-profile">
-
-                        <div class="profile">
-                            <div class="profile-image">
-                            </div>
-                            <div class="profile-data">
-                                  <img width=200px height=200px src="https://www.offensiveosint.io/content/images/2020/07/OffensiveOsint-logo-RGB-2.png">
-
-                            </div>
-
-                        </div>
-                    </li>
                     <li class="xn-title">Navigation</li>
                     <li class="">
                         <a href="index"><span class="fa fa-desktop"></span> <span class="xn-text">Dashboard</span></a>
@@ -86,7 +74,7 @@
                 <!-- END BREADCRUMB -->
 
                 <!-- PAGE CONTENT WRAPPER -->
-                <div class="page-content-wrap">
+                <div class="page-content-wrap" id="main" tabindex="-1">
 
                     <!-- START WIDGETS -->
                     <div class="row">
@@ -101,6 +89,7 @@
 
                                 </div>
                                 <div class="panel-body">
+                                    {% if history %}
                                     <table id="customers2" class="table datatable">
                                         <thead>
                                             <tr>
@@ -124,6 +113,9 @@
 
                                         </tbody>
                                     </table>
+                                    {% else %}
+                                    <div class="km-empty-state">No searches yet &mdash; run one from the Search page.</div>
+                                    {% endif %}
 </div>
 
 

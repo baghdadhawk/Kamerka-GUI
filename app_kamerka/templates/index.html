@@ -31,17 +31,6 @@
                         <a href="/">ꓘamerka</a>
                         <a href="#" class="x-navigation-control"></a>
                     </li>
-                    <li class="xn-profile">
-
-                        <div class="profile">
-                            <div class="profile-image">
-                            </div>
-                            <div class="profile-data">
-                                  <img width=200px height=200px src="https://www.offensiveosint.io/content/images/2020/07/OffensiveOsint-logo-RGB-2.png">
-                            </div>
-
-                        </div>
-                    </li>
                     <li class="xn-title">Navigation</li>
                     <li class="">
                         <a href="index"><span class="fa fa-desktop"></span> <span class="xn-text">Dashboard</span></a>
@@ -76,7 +65,7 @@
                 
                 <!-- START X-NAVIGATION VERTICAL -->
                 <ul class="x-navigation x-navigation-horizontal x-navigation-panel">
-<center><h1 style="color:#ff00cd; text-align:center">Industrial Control Systems & Internet of Things reconnaissance</h1></center>
+<center><h1 class="km-page-title">Industrial Control Systems & Internet of Things reconnaissance</h1></center>
                 </ul>
                 <!-- END X-NAVIGATION VERTICAL -->                     
 
@@ -92,36 +81,16 @@
                 <!-- END BREADCRUMB -->                       
                 
                 <!-- PAGE CONTENT WRAPPER -->
-                <div class="page-content-wrap">
-                    
-                    <!-- START WIDGETS -->                    
-                    <div class="row">
-                        <div class="col-md-3">
-                            
-                            <!-- START WIDGET SLIDER -->
-                            <div class="widget widget-default widget-carousel">
-                                <div class="owl-carousel" id="owl-example">
-                                    <div>
-                                        <div class="widget-title">Shodan credits</div>
-                                        <div class="widget-int">{% if shodan_credits != None %}{{ shodan_credits }}{% else %}<span class="km-na">n/a</span>{% endif %}</div>
-                                    </div>
-                                    <div>
-                                        <div class="widget-title">BinaryEdge credits</div>
-                                        <div class="widget-int">{% if binaryedge_credits != None %}{{ binaryedge_credits }}{% else %}<span class="km-na">n/a</span>{% endif %}</div>
-                                    </div>
-                                </div>
-                                <div class="widget-controls">
-                                </div>
-                            </div>
-                            <!-- END WIDGET SLIDER -->
+                <div class="page-content-wrap" id="main" tabindex="-1">
 
-                        </div>
+                    <!-- START WIDGETS -->
+                    <div class="row">
                         <div class="col-md-3">
 
                             <!-- START WIDGET MESSAGES -->
                             <div class="widget widget-default widget-item-icon">
                                 <div class="widget-item-left">
-                                    <span class="glyphicon glyphicon-eye-open"></span>
+                                    <svg class="km-icon" aria-hidden="true"><use href="#icon-eye"></use></svg>
                                 </div>
                                 <div class="widget-data">
                                     <div class="widget-int num-count">{{ device.count }}</div>
@@ -137,7 +106,7 @@
 
                             <div class="widget widget-default widget-item-icon">
                                 <div class="widget-item-left">
-                                    <span class="fa fa-search"></span>
+                                    <svg class="km-icon" aria-hidden="true"><use href="#icon-search"></use></svg>
                                 </div>
                                 <div class="widget-data">
                                     <div class="widget-int num-count">{{ search_len.count }}</div>
@@ -150,9 +119,83 @@
                         </div>
                         <div class="col-md-3">
 
+                            <!-- START WIDGET HONEYPOTS -->
+                            <a class="km-kpi-link" href="{% url 'devices' %}?honeypot=1">
+                            <div class="widget widget-default widget-item-icon km-kpi-clickable">
+                                <div class="widget-item-left">
+                                    <svg class="km-icon" aria-hidden="true"><use href="#icon-shield-alert"></use></svg>
+                                </div>
+                                <div class="widget-data">
+                                    <div class="widget-int num-count">{{ honeypot_count }}</div>
+                                    <div class="widget-title">Honeypots flagged</div>
+                                </div>
+                                <div class="widget-controls">
+                                </div>
+                            </div>
+                            </a>
+                            <!-- END WIDGET HONEYPOTS -->
+
+                        </div>
+                        <div class="col-md-3">
+
+                            <!-- START WIDGET COUNTRIES -->
+                            <a class="km-kpi-link" href="{% url 'map' %}">
+                            <div class="widget widget-default widget-item-icon km-kpi-clickable">
+                                <div class="widget-item-left">
+                                    <svg class="km-icon" aria-hidden="true"><use href="#icon-globe"></use></svg>
+                                </div>
+                                <div class="widget-data">
+                                    <div class="widget-int num-count">{{ country_count }}</div>
+                                    <div class="widget-title">Countries</div>
+                                </div>
+                                <div class="widget-controls">
+                                </div>
+                            </div>
+                            </a>
+                            <!-- END WIDGET COUNTRIES -->
+
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4">
+
+                            <!-- START CREDITS (loaded async, see the get_credits fetch below) -->
+                            <div class="widget widget-default">
+                                <div class="km-credit-stats">
+                                    <div class="km-credit-stat">
+                                        <div class="widget-title"><svg class="km-icon" aria-hidden="true"><use href="#icon-credit-card"></use></svg> Shodan</div>
+                                        <div class="widget-int" id="km-shodan-credits"><span class="km-skeleton"></span></div>
+                                    </div>
+                                    <div class="km-credit-stat">
+                                        <div class="widget-title"><svg class="km-icon" aria-hidden="true"><use href="#icon-credit-card"></use></svg> BinaryEdge</div>
+                                        <div class="widget-int" id="km-binaryedge-credits"><span class="km-skeleton"></span></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- END CREDITS -->
+
+                        </div>
+                        <div class="col-md-4">
+
+                            <div class="widget widget-default widget-item-icon">
+                                <div class="widget-item-left">
+                                    <svg class="km-icon" aria-hidden="true"><use href="#icon-layers"></use></svg>
+                                </div>
+                                <div class="widget-data">
+                                    <div class="widget-int num-count">{{ top_types|length }}</div>
+                                    <div class="widget-title">Device families seen</div>
+                                </div>
+                                <div class="widget-controls">
+                                </div>
+                            </div>
+
+                        </div>
+                        <div class="col-md-4">
+
                             <!-- START WIDGET CLOCK -->
                             <div class="widget widget-info widget-padding-sm">
                                 <br>
+                                <svg class="km-icon" aria-hidden="true" style="opacity:0.7;"><use href="#icon-clock"></use></svg>
                                 <div class="widget-big-int plugin-clock">00:00</div>
                                 <div class="widget-subtitle plugin-date">Loading...</div>
                                 <div class="widget-controls">
@@ -176,7 +219,7 @@
                                     </div>
                                     <div class="panel-body padding-0" >
                                         {% if ports %}
-                                        <div class="chart-holder" id="dashboard-bar-1" style="height: 200px;background-color:#0a141d"></div>
+                                        <div class="chart-holder" id="dashboard-bar-1" style="height: 200px;"></div>
                                         {% else %}
                                         <div class="km-empty-state" style="height: 200px;">No port data yet &mdash; run a search to populate this chart.</div>
                                         {% endif %}
@@ -199,7 +242,7 @@
                                 </div>
                                 <div class="panel-body padding-0">
                                     {% if device.count %}
-                                    <div class="chart-holder" id="dashboard-donut-1" style="height: 160px; background-color:#0a141d"></div>
+                                    <div class="chart-holder" id="dashboard-donut-1" style="height: 160px;"></div>
                                     <div id="dashboard-donut-1-legend" class="km-chart-legend"></div>
                                     {% else %}
                                     <div class="km-empty-state" style="height: 200px;">No devices yet &mdash; run a search to populate this chart.</div>
@@ -219,7 +262,7 @@
                                     </div>
 
                                 </div>
-                                <div class="panel-body panel-body-table" style="background-color:#0a141d">
+                                <div class="panel-body panel-body-table">
 
                                     {% if search %}
                                     <div class="table-responsive">
@@ -228,7 +271,7 @@
                                             <tbody>
                                                 <tr>{% for object in search %}
 
-                                                        <td><strong><a href="{% url 'results' id=object.id %}">{{object.country}} {{object.coordinates }}  {% if object.country == "NMAP Scan" %} {{object.ics}} {% endif %}</strong></td>
+                                                        <td dir="auto"><strong><a href="{% url 'results' id=object.id %}">{{object.country}} {{object.coordinates }}  {% if object.country == "NMAP Scan" %} {{object.ics}} {% endif %}</strong></td>
                                                 </a>
                                                 </tr>
 
@@ -259,7 +302,7 @@
 
 
                                 </div>
-                                <div class="panel-body" style="background-color:#0a141d">
+                                <div class="panel-body">
 
                                             {% if countries %}
                                             <div id="dashboard-map-seles" style="width: 100%; height: 200px;"></div>
@@ -283,7 +326,7 @@
                                 </div>
                                 <div class="panel-body padding-0">
                                     {% if vulns %}
-                                    <div id="wordcloud" class="chart-holder" style="height:200px;overflow:hidden; background-color:#0a141d"></div>
+                                    <div id="wordcloud" class="chart-holder" style="height:200px;overflow:hidden;"></div>
                                     {% else %}
                                     <div class="km-empty-state" style="height: 200px;">No vulnerabilities recorded yet.</div>
                                     {% endif %}
@@ -293,6 +336,117 @@
                         </div>
                     </div>
 
+                    <div class="row">
+                        <div class="col-md-3">
+
+                            <div class="panel panel-default">
+                                <div class="panel-heading">
+                                    <div class="panel-title-box">
+                                        <h3><svg class="km-icon" aria-hidden="true"><use href="#icon-layers"></use></svg> Top device types</h3>
+                                    </div>
+                                </div>
+                                <div class="panel-body padding-0">
+                                    {% if top_types %}
+                                    <ul class="km-rank-list">
+                                        {% for row in top_types %}
+                                        <li>
+                                            <a class="km-rank-row" href="{% url 'devices' %}?type={{ row.type|urlencode }}">
+                                                <div class="km-rank-row-head">
+                                                    <span class="km-rank-label">{{ row.type }}</span>
+                                                    <span class="km-rank-count">{{ row.c }}</span>
+                                                </div>
+                                                <div class="km-rank-bar-track">
+                                                    <div class="km-rank-bar-fill" style="width: {% widthratio row.c top_types.0.c 100 %}%;"></div>
+                                                </div>
+                                            </a>
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                    {% else %}
+                                    <div class="km-empty-state" style="height: 160px;">No devices yet.</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <div class="col-md-3">
+
+                            <div class="panel panel-default">
+                                <div class="panel-heading">
+                                    <div class="panel-title-box">
+                                        <h3><svg class="km-icon" aria-hidden="true"><use href="#icon-building"></use></svg> Top orgs</h3>
+                                    </div>
+                                </div>
+                                <div class="panel-body padding-0">
+                                    {% if top_orgs %}
+                                    <ul class="km-rank-list">
+                                        {% for row in top_orgs %}
+                                        <li>
+                                            <a class="km-rank-row" href="{% url 'devices' %}?org={{ row.org|urlencode }}">
+                                                <div class="km-rank-row-head">
+                                                    <span class="km-rank-label" title="{{ row.org }}" dir="auto">{{ row.org }}</span>
+                                                    <span class="km-rank-count">{{ row.c }}</span>
+                                                </div>
+                                                <div class="km-rank-bar-track">
+                                                    <div class="km-rank-bar-fill" style="width: {% widthratio row.c top_orgs.0.c 100 %}%;"></div>
+                                                </div>
+                                            </a>
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                    {% else %}
+                                    <div class="km-empty-state" style="height: 160px;">No org data yet.</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <div class="col-md-6">
+
+                            <div class="panel panel-default">
+                                <div class="panel-heading">
+                                    <div class="panel-title-box">
+                                        <h3><svg class="km-icon" aria-hidden="true"><use href="#icon-list"></use></svg> Recent devices</h3>
+                                    </div>
+                                </div>
+                                <div class="panel-body padding-0">
+                                    {% if recent_devices %}
+                                    <div class="table-responsive">
+                                        <table class="km-table-compact">
+                                            <thead>
+                                                <tr>
+                                                    <th>IP</th>
+                                                    <th>Type</th>
+                                                    <th>Org</th>
+                                                    <th>Country</th>
+                                                    <th>Port</th>
+                                                    <th></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for d in recent_devices %}
+                                                <tr>
+                                                    <td><a href="{% url 'device' id=d.search_id device_id=d.id ip=d.ip %}">{{ d.ip }}</a></td>
+                                                    <td>{{ d.type }}</td>
+                                                    <td dir="auto"><span class="km-truncate" title="{{ d.org }}">{{ d.org }}</span></td>
+                                                    <td>{{ d.country_code }}</td>
+                                                    <td>{{ d.port }}</td>
+                                                    <td>{% if d.honeypot_score >= 50 %}<span class="km-badge km-badge-danger">&#9888; honeypot</span>{% endif %}</td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    {% else %}
+                                    <div class="km-empty-state" style="height: 160px;">No devices yet &mdash; run a search to populate this table.</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
 
                 </div>
                 <!-- END PAGE CONTENT WRAPPER -->
@@ -349,6 +503,43 @@ function customProgress(progressBarElement, progressBarMessageElement, progress)
         .start();
     {% endif %}
     </script>
+<script type="text/javascript">
+    // Load the Shodan/BinaryEdge query-credit counts AFTER page paint via the
+    // existing get_credits AJAX endpoint, instead of index() blocking the
+    // whole dashboard render on check_credits() (a live Shodan + BinaryEdge
+    // call) -- see kamerka/views.index(). Fails soft: any error (offline,
+    // unconfigured keys, timeout) just shows "unavailable" per-provider.
+    (function () {
+        var $shodan = document.getElementById('km-shodan-credits');
+        var $binaryedge = document.getElementById('km-binaryedge-credits');
+
+        function renderCredit(el, value) {
+            if (!el) { return; }
+            if (value === null || value === undefined) {
+                el.innerHTML = '<span class="km-na">unavailable</span>';
+            } else {
+                el.textContent = value;
+            }
+        }
+
+        fetch("{% url 'get_credits' %}", {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin'
+        })
+        .then(function (response) {
+            if (!response.ok) { throw new Error('get_credits failed: ' + response.status); }
+            return response.json();
+        })
+        .then(function (data) {
+            renderCredit($shodan, data.shodan_credits);
+            renderCredit($binaryedge, data.binaryedge_credits);
+        })
+        .catch(function () {
+            renderCredit($shodan, null);
+            renderCredit($binaryedge, null);
+        });
+    })();
+</script>
 
 
 

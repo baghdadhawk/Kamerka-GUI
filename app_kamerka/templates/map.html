@@ -31,18 +31,6 @@
                         <a href="/">ꓘamerka</a>
                         <a href="#" class="x-navigation-control"></a>
                     </li>
-                    <li class="xn-profile">
-
-                        <div class="profile">
-                            <div class="profile-image">
-                            </div>
-                            <div class="profile-data">
-                                  <img width=200px height=200px src="https://www.offensiveosint.io/content/images/2020/07/OffensiveOsint-logo-RGB-2.png">
-
-                            </div>
-
-                        </div>
-                    </li>
                     <li class="xn-title">Navigation</li>
                     <li class="">
                         <a href="index"><span class="fa fa-desktop"></span> <span class="xn-text">Dashboard</span></a>
@@ -92,7 +80,7 @@
                 <!-- END BREADCRUMB -->
 
                 <!-- PAGE CONTENT WRAPPER -->
-                <div class="page-content-wrap">
+                <div class="page-content-wrap" id="main" tabindex="-1">
 
                     <!-- START WIDGETS -->
                     <div class="row">
@@ -127,8 +115,9 @@
 <script async defer
     src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&libraries=places" type="text/javascript"
     onerror="window.kamMapLoadFailed = true;"></script>
-         <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+         <script src="{% static 'vendor/jquery/3.4.1/jquery.min.js' %}"></script>
 <script src="{% static 'js/markerclusterer.js' %}"></script>
+<script src="{% static 'js/kamerka_gmaps_theme.js' %}"></script>
 
 <script type="text/javascript">
 $(document).ready(function() {
@@ -335,90 +324,12 @@ function initialize() {
         center: mumbai,
         maxZoom: 17,
         mapTypeId: google.maps.MapTypeId.ROADMAP,
-        styles: [
-        { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
-        { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] },
-        { elementType: "labels.text.fill", stylers: [{ color: "#746855" }] },
-        {
-          featureType: "administrative.locality",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#d59563" }],
-        },
-        {
-          featureType: "poi",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#d59563" }],
-        },
-        {
-          featureType: "poi.park",
-          elementType: "geometry",
-          stylers: [{ color: "#263c3f" }],
-        },
-        {
-          featureType: "poi.park",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#6b9a76" }],
-        },
-        {
-          featureType: "road",
-          elementType: "geometry",
-          stylers: [{ color: "#38414e" }],
-        },
-        {
-          featureType: "road",
-          elementType: "geometry.stroke",
-          stylers: [{ color: "#212a37" }],
-        },
-        {
-          featureType: "road",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#9ca5b3" }],
-        },
-        {
-          featureType: "road.highway",
-          elementType: "geometry",
-          stylers: [{ color: "#746855" }],
-        },
-        {
-          featureType: "road.highway",
-          elementType: "geometry.stroke",
-          stylers: [{ color: "#1f2835" }],
-        },
-        {
-          featureType: "road.highway",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#f3d19c" }],
-        },
-        {
-          featureType: "transit",
-          elementType: "geometry",
-          stylers: [{ color: "#2f3948" }],
-        },
-        {
-          featureType: "transit.station",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#d59563" }],
-        },
-        {
-          featureType: "water",
-          elementType: "geometry",
-          stylers: [{ color: "#17263c" }],
-        },
-        {
-          featureType: "water",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#515c6d" }],
-        },
-        {
-          featureType: "water",
-          elementType: "labels.text.stroke",
-          stylers: [{ color: "#17263c" }],
-        },
-      ],
+        styles: (window.kamGoogleMapStyles ? window.kamGoogleMapStyles() : []),
         streetViewControl: false
     }
 
     gm_map = new google.maps.Map(document.getElementById('google_world_map'), options_googlemaps);
+    if (window.kamRegisterGoogleMap) { window.kamRegisterGoogleMap(gm_map); }
 
 
     var options_markerclusterer = {

@@ -13,28 +13,10 @@
         <!-- CSS INCLUDE -->
 
         <link rel="stylesheet" type="text/css" id="theme" href="{% static 'css/theme-default.css' %}"/>
-        <link rel=stylesheet href=https://cdn.jsdelivr.net/npm/pretty-print-json@1.2/dist/pretty-print-json.dark-mode.css>
+        <link rel="stylesheet" href="{% static 'vendor/pretty-print-json/1.2.6/pretty-print-json.dark-mode.css' %}">
         <link rel="stylesheet" type="text/css" href="{% static 'css/kamerka-modern.css' %}"/>
         <!-- EOF CSS INCLUDE -->
     </head>
-<style>
-   pre {
-   background-color: #15171A;
-   border: 1px solid #0064d7;
-   padding: 10px 20px;
-   margin: 20px;
-   }
-.json-key {
-   color: #00E1FF;
-   }
-.json-value {
-   color: #ff00cd;
-   }
-.json-string {
-   color: #ff00cd;
-   }
-
-</style>
     <body>
         {% include '_nav.html' %}
         <!-- START PAGE CONTAINER -->
@@ -47,18 +29,6 @@
                     <li class="xn-logo">
                         <a href="/">ꓘamerka</a>
                         <a href="#" class="x-navigation-control"></a>
-                    </li>
-                    <li class="xn-profile">
-
-                        <div class="profile">
-                            <div class="profile-image">
-                            </div>
-                            <div class="profile-data">
-                                  <img width=200px height=200px src="https://www.offensiveosint.io/content/images/2020/07/OffensiveOsint-logo-RGB-2.png">
-
-                            </div>
-
-                        </div>
                     </li>
                     <li class="xn-title">Navigation</li>
                     <li class="">
@@ -106,9 +76,15 @@
                 <!-- END BREADCRUMB -->
 
                 <!-- PAGE CONTENT WRAPPER -->
-                <div class="page-content-wrap">
+                <div class="page-content-wrap" id="main" tabindex="-1">
 
                     {% csrf_token %}
+
+                    <!-- START PRINT/REPORT TOOLBAR -->
+                    <div class="km-toolbar">
+                        <button type="button" id="km-print-btn" class="km-btn km-print-btn" onclick="window.print()"><svg class="km-icon" aria-hidden="true"><use href="#icon-printer"></use></svg> Print / Report</button>
+                    </div>
+                    <!-- END PRINT/REPORT TOOLBAR -->
 
                     <!-- START DEVICE SUMMARY HEADER -->
                     <div class="km-device-summary">
@@ -116,11 +92,11 @@
                         <div class="km-device-summary-fields">
                             <div class="km-device-summary-field">
                                 <span class="km-label">Product</span>
-                                <span class="km-value">{% if device.product %}{{ device.product }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
+                                <span class="km-value" dir="auto">{% if device.product %}{{ device.product }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
                             </div>
                             <div class="km-device-summary-field">
                                 <span class="km-label">Org</span>
-                                <span class="km-value">{% if device.org %}{{ device.org }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
+                                <span class="km-value" dir="auto">{% if device.org %}{{ device.org }}{% else %}<span class="km-na">n/a</span>{% endif %}</span>
                             </div>
                             <div class="km-device-summary-field">
                                 <span class="km-label">Country</span>
@@ -134,9 +110,9 @@
                                 <span class="km-label">Honeypot verdict</span>
                                 <span class="km-value">
                                     {% if is_likely_honeypot %}
-                                    <span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:2px 8px; border-radius:3px;">&#9888; Likely honeypot</span>
+                                    <span class="km-badge km-badge-danger">&#9888; Likely honeypot</span>
                                     {% else %}
-                                    <span class="km-badge km-badge-success" style="background:#1caf9a; color:#fff; padding:2px 8px; border-radius:3px;">&#10003; Probably real</span>
+                                    <span class="km-badge km-badge-success">&#10003; Probably real</span>
                                     {% endif %}
                                 </span>
                             </div>
@@ -157,7 +133,7 @@
                             <div class="panel panel-default tabs">
                                 <ul class="nav nav-tabs nav-justified">
                                        {% if device.located %}
-                                                                    <li><a href="#tab8" data-toggle="tab" style="background:#ff00cd">Locate</a></li>
+                                                                    <li><a href="#tab8" data-toggle="tab" style="background:var(--km-accent-2)">Locate</a></li>
                                     {% else %}
                                     <li><a href="#tab8" data-toggle="tab">Locate</a></li>
                                         {% endif %}
@@ -168,7 +144,7 @@
                                     <div class="tab-pane" id="tab8">
                                         <div class="panel panel-default">
                                             {% if device.located %}
-                                <div class="panel-heading" style="background:#ff00cd">
+                                <div class="panel-heading" style="background:var(--km-accent-2)">
                                     {% else %}
                                     <div class="panel-heading">
                                         {% endif %}
@@ -227,205 +203,188 @@
 
 
 <div class="tab-pane active" id="tab9">
-    <div class="panel panel-default">
-                                <div class="panel-heading">
-                                    <h3 class="panel-title">{{ device.ip }}</h3>
-                                </div>
-                                <div class="panel-body"><center>
-                                        <b>{{ device.hostnames }}<br>
-                                        {{ device.product }}<br>
-                                        {{ device.type }}<br>
-                                        {{ device.org }}<br>
-                                        {{ device.vulns|slice:"1:-1" }}<br>
-                                            {{ device.city }}</b><br><br>
-
-                                    {% if banner_warning %}
-                                    <p style="color:#ff5050; font-weight:bold;">Warning: this banner looks like a generic/HTTP-error response, not device-specific data &mdash; the classification may be a false positive.</p>
-                                    {% endif %}
-
-                                    <div>
-                                        <strong>Indicators:</strong>
-                                        {% if indicators %}
-                                        <ul style="list-style:none; padding:0; margin:0;">
-                                            {% for a in indicators %}<li>{{ a }}</li>{% endfor %}
-                                        </ul>
-                                        {% else %}
-                                        <span style="opacity:0.6;"> no indicators</span>
-                                        {% endif %}
-                                    </div>
-
-                                    <details>
-                                        <summary>Raw banner</summary>
-                                        <pre style="text-align:left; white-space:pre-wrap; word-break:break-word;">{{ device.data }}</pre>
-                                    </details>
-
-                                        {{ device.ssl }}
-                                                                                    <td>{{ device.category }}</td><br>
-
-                                    {% if device.screenshot %}
-                                    <img src="data:image/jpeg;base64,{{ device.screenshot }}">
-                                    {% endif %}
-</center>
-                                    </div>
-                            </div>
-
-<div class="row">
-                        <div class="col-md-4">
-
-                            <!-- START USERS ACTIVITY BLOCK -->
-                            <div class="panel panel-default">
-                                <div class="panel-heading ui-draggable-handle">
-                                    <div class="panel-title-box">
-                                        <h3><a href="https://shodan.io/host/{{device.ip}}">Shodan Scan</a>  </h3>
-                                    </div>
-
-                                </div>
-                                <div class="panel-body padding-0">
-                                    <button type="button" id="shodan_scan" class="btn btn-primary active">Scan</button>
-                                                                        <button type="button" id="shodan_show" class="btn btn-primary active">Display</button>
-
-                                    <progress id="progress-bar2" value="0" max="100" style="display:none; margin-bottom: 1em;"></progress>
-                                    <div id="shodan_results" style="display: none;"></div>
-
-                                </div>
-                            </div>
-                            <!-- END USERS ACTIVITY BLOCK -->
-
-                        </div>
-
-    <div class="col-md-4">
-
-                            <!-- START USERS ACTIVITY BLOCK -->
-                            <div class="panel panel-default">
-                                <div class="panel-heading ui-draggable-handle">
-                                    <div class="panel-title-box">
-                                        <h3><a href="https://app.binaryedge.io/services/risk/score?type=ip&query={{device.ip}}">Binary Edge</a></h3>
-                                    </div>
-
-                                </div>
-                                <div class="panel-body padding-0">
-                                    <button type="button" id="binaryedge_scan" class="btn btn-primary active">Scan</button>
-                                                                        <button type="button" id="binaryedge_show" class="btn btn-primary active">Display</button>
-                                    <div id="binaryedge_results" class="contact-info" style="display: none;"></div>
-                                    <progress id="progress-bar5" value="0" max="100" style="display:none; margin-bottom: 1em;"></progress>
-
-                                </div>
-                            </div>
-                            <!-- END USERS ACTIVITY BLOCK -->
-
-                        </div>
-
-   <div class="col-md-4">
-
-                            <!-- START USERS ACTIVITY BLOCK -->
-                            <div class="panel panel-default">
-                                <div class="panel-heading ui-draggable-handle">
-                                    <div class="panel-title-box">
-                                        <h3>Whois XML API</h3>
-                                    </div>
-
-                                </div>
-                                <div class="panel-body padding-0">
-                                    <button type="button" id="whois_scan" class="btn btn-primary active">Scan</button>
-                                                                        <button type="button" id="whois_show" class="btn btn-primary active">Display</button>
-                                    <div id="whois_results" class="contact-info" style="display: none;"></div>
-                                    <progress id="progress-bar6" value="0" max="100" style="display:none; margin-bottom: 1em;"></progress>
-
-                                </div>
-                            </div>
-                            <!-- END USERS ACTIVITY BLOCK -->
-
-                        </div>
-                        </div>
-
-<div class="row">
-    <div class="col-md-12">
-        <!-- START HONEYPOT BLOCK -->
-        <div class="panel panel-default">
-            <div class="panel-heading ui-draggable-handle">
-                <div class="panel-title-box">
-                    <h3>Honeypot detection</h3>
+    <!-- Two-column detail layout: primary = Intel (raw banner, indicators)
+         + honeypot verdict; secondary = enrichment actions (Shodan/
+         BinaryEdge/Whois), notes and other sightings. Triage status lives
+         in the summary header above the tabs (#device-status-control). -->
+    <div class="km-device-grid">
+        <div class="km-device-grid-primary">
+            <!-- START INTEL BLOCK -->
+            <div class="panel panel-default">
+                <div class="panel-heading">
+                    <h3 class="panel-title">{{ device.ip }}</h3>
                 </div>
-            </div>
-            <div class="panel-body padding-2">
-                <p>
-                    <strong>Local heuristic score:</strong> {{ device.honeypot_score }}/100
-                    {% if is_likely_honeypot %}
-                    <span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:2px 8px; border-radius:3px;">&#9888; Likely honeypot</span>
-                    {% else %}
-                    <span class="km-badge km-badge-success" style="background:#1caf9a; color:#fff; padding:2px 8px; border-radius:3px;">&#10003; Probably real</span>
+                <div class="panel-body km-intel-body">
+                    <div class="km-intel-fields">
+                        <b dir="auto">{{ device.hostnames }}</b>
+                        <span dir="auto">{{ device.product }}</span>
+                        <span>{{ device.type }}</span>
+                        <span dir="auto">{{ device.org }}</span>
+                        <span>{{ device.vulns|slice:"1:-1" }}</span>
+                        <span dir="auto">{{ device.city }}</span>
+                    </div>
+
+                    {% if banner_warning %}
+                    <p class="km-alert-text">Warning: this banner looks like a generic/HTTP-error response, not device-specific data &mdash; the classification may be a false positive.</p>
                     {% endif %}
-                    <br><small>(threshold: {{ honeypot_threshold }})</small>
-                </p>
-                {% if honeypot_reasons %}
-                <strong>Reasons:</strong>
-                <ul>
-                    {% for r in honeypot_reasons %}<li>{{ r }}</li>{% endfor %}
-                </ul>
-                {% else %}
-                <p><small>No local heuristic reasons fired.</small></p>
-                {% endif %}
 
-                <hr>
-                <p><strong>Shodan HoneyScore (on-demand):</strong>
-                    <span id="honeyscore_result">
-                        {% if device.honeyscore != None %}{{ device.honeyscore }}{% else %}not checked{% endif %}
-                    </span>
-                </p>
-                <button type="button" id="honeyscore_check" class="btn btn-primary active">Check HoneyScore (Shodan)</button>
-            </div>
-        </div>
-        <!-- END HONEYPOT BLOCK -->
-    </div>
-</div>
+                    <div>
+                        <strong>Indicators:</strong>
+                        {% if indicators %}
+                        <ul style="list-style:none; padding:0; margin:0;">
+                            {% for a in indicators %}<li dir="auto">{{ a }}</li>{% endfor %}
+                        </ul>
+                        {% else %}
+                        <span style="opacity:0.6;"> no indicators</span>
+                        {% endif %}
+                    </div>
 
-<div class="row">
-    <div class="col-md-6">
-        <!-- START NOTES BLOCK -->
-        <div class="panel panel-default">
-            <div class="panel-heading ui-draggable-handle">
-                <div class="panel-title-box">
-                    <h3>Notes</h3>
+                    <details>
+                        <summary>Raw banner</summary>
+                        <pre dir="auto" style="text-align:left; white-space:pre-wrap; word-break:break-word;">{{ device.data }}</pre>
+                    </details>
+
+                    {{ device.ssl }}
+                    <div><strong>Category:</strong> {{ device.category }}</div>
+
+                    {% if device.screenshot %}
+                    <div class="km-screenshot-wrap">
+                        <img src="data:image/jpeg;base64,{{ device.screenshot }}">
+                    </div>
+                    {% endif %}
                 </div>
             </div>
-            <div class="panel-body padding-2 km-notes-box">
-                <textarea id="device_notes_text">{{ device.notes }}</textarea>
-                <br><br>
-                <button type="button" id="save_notes" class="btn btn-primary active">Save notes</button>
-            </div>
-        </div>
-        <!-- END NOTES BLOCK -->
-    </div>
+            <!-- END INTEL BLOCK -->
 
-    <div class="col-md-6">
-        <!-- START OTHER SIGHTINGS BLOCK -->
-        <div class="panel panel-default">
-            <div class="panel-heading ui-draggable-handle">
-                <div class="panel-title-box">
-                    <h3>Other sightings{% if sightings_count %} ({{ sightings_count }}){% endif %}</h3>
+            <!-- START HONEYPOT BLOCK -->
+            <div class="panel panel-default">
+                <div class="panel-heading ui-draggable-handle">
+                    <div class="panel-title-box">
+                        <h3>Honeypot detection</h3>
+                    </div>
+                </div>
+                <div class="panel-body padding-2">
+                    <p>
+                        <strong>Local heuristic score:</strong> {{ device.honeypot_score }}/100
+                        {% if is_likely_honeypot %}
+                        <span class="km-badge km-badge-danger">&#9888; Likely honeypot</span>
+                        {% else %}
+                        <span class="km-badge km-badge-success">&#10003; Probably real</span>
+                        {% endif %}
+                        <br><small>(threshold: {{ honeypot_threshold }})</small>
+                    </p>
+                    {% if honeypot_reasons %}
+                    <strong>Reasons:</strong>
+                    <ul>
+                        {% for r in honeypot_reasons %}<li>{{ r }}</li>{% endfor %}
+                    </ul>
+                    {% else %}
+                    <p><small>No local heuristic reasons fired.</small></p>
+                    {% endif %}
+
+                    <hr>
+                    <p><strong>Shodan HoneyScore (on-demand):</strong>
+                        <span id="honeyscore_result">
+                            {% if device.honeyscore != None %}{{ device.honeyscore }}{% else %}not checked{% endif %}
+                        </span>
+                    </p>
+                    <button type="button" id="honeyscore_check" class="btn btn-primary active">Check HoneyScore (Shodan)</button>
                 </div>
             </div>
-            <div class="panel-body padding-2">
-                {% if other_sightings %}
-                <ul class="km-sightings-list">
-                    {% for s in other_sightings %}
-                    <li>
-                        <a href="{% url 'device' id=s.search_id device_id=s.id ip=s.ip %}">{{ s.ip }}</a>
-                        &mdash; {{ s.type }}{% if s.category %} ({{ s.category }}){% endif %}
-                        {% if s.honeypot_score >= honeypot_threshold %}<span class="km-badge km-badge-danger" style="background:#ff5050; color:#fff; padding:1px 6px; border-radius:3px;">honeypot</span>{% endif %}
-                    </li>
-                    {% endfor %}
-                </ul>
-                {% else %}
-                <p><small>None &mdash; this is the only time this IP has been seen.</small></p>
-                {% endif %}
-            </div>
+            <!-- END HONEYPOT BLOCK -->
         </div>
-        <!-- END OTHER SIGHTINGS BLOCK -->
+
+        <div class="km-device-grid-secondary">
+            <!-- START USERS ACTIVITY BLOCK -->
+            <div class="panel panel-default">
+                <div class="panel-heading ui-draggable-handle">
+                    <div class="panel-title-box">
+                        <h3><a href="https://shodan.io/host/{{device.ip}}">Shodan Scan</a></h3>
+                    </div>
+                </div>
+                <div class="panel-body padding-0">
+                    <button type="button" id="shodan_scan" class="btn btn-primary active">Scan</button>
+                    <button type="button" id="shodan_show" class="btn btn-primary active">Display</button>
+
+                    <progress id="progress-bar2" value="0" max="100" style="display:none; margin-bottom: 1em;"></progress>
+                    <div id="shodan_results" style="display: none;"></div>
+                </div>
+            </div>
+            <!-- END USERS ACTIVITY BLOCK -->
+
+            <!-- START USERS ACTIVITY BLOCK -->
+            <div class="panel panel-default">
+                <div class="panel-heading ui-draggable-handle">
+                    <div class="panel-title-box">
+                        <h3><a href="https://app.binaryedge.io/services/risk/score?type=ip&query={{device.ip}}">Binary Edge</a></h3>
+                    </div>
+                </div>
+                <div class="panel-body padding-0">
+                    <button type="button" id="binaryedge_scan" class="btn btn-primary active">Scan</button>
+                    <button type="button" id="binaryedge_show" class="btn btn-primary active">Display</button>
+                    <div id="binaryedge_results" class="contact-info" style="display: none;"></div>
+                    <progress id="progress-bar5" value="0" max="100" style="display:none; margin-bottom: 1em;"></progress>
+                </div>
+            </div>
+            <!-- END USERS ACTIVITY BLOCK -->
+
+            <!-- START USERS ACTIVITY BLOCK -->
+            <div class="panel panel-default">
+                <div class="panel-heading ui-draggable-handle">
+                    <div class="panel-title-box">
+                        <h3>Whois XML API</h3>
+                    </div>
+                </div>
+                <div class="panel-body padding-0">
+                    <button type="button" id="whois_scan" class="btn btn-primary active">Scan</button>
+                    <button type="button" id="whois_show" class="btn btn-primary active">Display</button>
+                    <div id="whois_results" class="contact-info" style="display: none;"></div>
+                    <progress id="progress-bar6" value="0" max="100" style="display:none; margin-bottom: 1em;"></progress>
+                </div>
+            </div>
+            <!-- END USERS ACTIVITY BLOCK -->
+
+            <!-- START NOTES BLOCK -->
+            <div class="panel panel-default">
+                <div class="panel-heading ui-draggable-handle">
+                    <div class="panel-title-box">
+                        <h3>Notes</h3>
+                    </div>
+                </div>
+                <div class="panel-body padding-2 km-notes-box">
+                    <textarea id="device_notes_text" dir="auto">{{ device.notes }}</textarea>
+                    <br><br>
+                    <button type="button" id="save_notes" class="btn btn-primary active">Save notes</button>
+                </div>
+            </div>
+            <!-- END NOTES BLOCK -->
+
+            <!-- START OTHER SIGHTINGS BLOCK -->
+            <div class="panel panel-default">
+                <div class="panel-heading ui-draggable-handle">
+                    <div class="panel-title-box">
+                        <h3>Other sightings{% if sightings_count %} ({{ sightings_count }}){% endif %}</h3>
+                    </div>
+                </div>
+                <div class="panel-body padding-2">
+                    {% if other_sightings %}
+                    <ul class="km-sightings-list">
+                        {% for s in other_sightings %}
+                        <li>
+                            <a href="{% url 'device' id=s.search_id device_id=s.id ip=s.ip %}">{{ s.ip }}</a>
+                            &mdash; {{ s.type }}{% if s.category %} ({{ s.category }}){% endif %}
+                            {% if s.honeypot_score >= honeypot_threshold %}<span class="km-badge km-badge-danger">honeypot</span>{% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <p><small>None &mdash; this is the only time this IP has been seen.</small></p>
+                    {% endif %}
+                </div>
+            </div>
+            <!-- END OTHER SIGHTINGS BLOCK -->
+        </div>
     </div>
-</div>
-
-
 
                                     </div>
                                         <div class="tab-pane" id="tab10">
@@ -545,9 +504,21 @@
                             <!-- START DATATABLE EXPORT -->
 
 
-<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&libraries=places"></script>
+<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&libraries=places"
+    onerror="window.kamMapLoadFailed = true;"></script>
+<script src="{% static 'js/kamerka_gmaps_theme.js' %}"></script>
 
 <script>
+/* map/marker/directions state is declared at top level (rather than
+   inside kamInitDeviceMap() below) since AddMarker()/GetRoute() -- called
+   from inline onclick handlers elsewhere on this page -- close over these
+   same variables. */
+var map, marker, bounds;
+var source, destination;
+var directionsDisplay;
+var directionsService;
+var init_marker;
+
 function AddMarker() {
 {% for dev in nearby %}
        var init_marker = new google.maps.LatLng({{ dev.lat }},{{ dev.lon }});
@@ -559,12 +530,11 @@ function AddMarker() {
   {% endfor %}
     };
 
-
-
-
-    var source, destination;
-    var directionsDisplay;
-    var directionsService = new google.maps.DirectionsService();
+function kamInitDeviceMap() {
+    // Needs the Maps JS API (`google.maps`) to already be loaded, so it is
+    // only called once that's confirmed -- see the kamMapLoadFailed guard
+    // below.
+    directionsService = new google.maps.DirectionsService();
     google.maps.event.addDomListener(window, 'load', function () {
 var options = { componentRestrictions: { country: '{{ device.country_code}}' } };
 
@@ -577,102 +547,24 @@ var options = { componentRestrictions: { country: '{{ device.country_code}}' } }
 
 
 
-    var init_marker = new google.maps.LatLng({{ device.lat }},{{ device.lon }});
+    init_marker = new google.maps.LatLng({{ device.lat }},{{ device.lon }});
     var mapOptions = {
         zoom: 13,
         center: init_marker,
         durationInTraffic: true,
-        styles: [
-        { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
-        { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] },
-        { elementType: "labels.text.fill", stylers: [{ color: "#746855" }] },
-        {
-          featureType: "administrative.locality",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#d59563" }],
-        },
-        {
-          featureType: "poi",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#d59563" }],
-        },
-        {
-          featureType: "poi.park",
-          elementType: "geometry",
-          stylers: [{ color: "#263c3f" }],
-        },
-        {
-          featureType: "poi.park",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#6b9a76" }],
-        },
-        {
-          featureType: "road",
-          elementType: "geometry",
-          stylers: [{ color: "#38414e" }],
-        },
-        {
-          featureType: "road",
-          elementType: "geometry.stroke",
-          stylers: [{ color: "#212a37" }],
-        },
-        {
-          featureType: "road",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#9ca5b3" }],
-        },
-        {
-          featureType: "road.highway",
-          elementType: "geometry",
-          stylers: [{ color: "#746855" }],
-        },
-        {
-          featureType: "road.highway",
-          elementType: "geometry.stroke",
-          stylers: [{ color: "#1f2835" }],
-        },
-        {
-          featureType: "road.highway",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#f3d19c" }],
-        },
-        {
-          featureType: "transit",
-          elementType: "geometry",
-          stylers: [{ color: "#2f3948" }],
-        },
-        {
-          featureType: "transit.station",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#d59563" }],
-        },
-        {
-          featureType: "water",
-          elementType: "geometry",
-          stylers: [{ color: "#17263c" }],
-        },
-        {
-          featureType: "water",
-          elementType: "labels.text.fill",
-          stylers: [{ color: "#515c6d" }],
-        },
-        {
-          featureType: "water",
-          elementType: "labels.text.stroke",
-          stylers: [{ color: "#17263c" }],
-        },
-      ],
+        styles: (window.kamGoogleMapStyles ? window.kamGoogleMapStyles() : []),
     };
     map = new google.maps.Map(document.getElementById('google_world_map'), mapOptions);
+    if (window.kamRegisterGoogleMap) { window.kamRegisterGoogleMap(map); }
 
-var marker = new google.maps.Marker({
+marker = new google.maps.Marker({
     map: map,
     title: 'Coordinates',
     position: init_marker,
   });
 
-   var bounds = new google.maps.LatLngBounds();
-
+   bounds = new google.maps.LatLngBounds();
+}
 
     function GetRoute() {
     //*********DIRECTIONS AND ROUTE**********************//
@@ -691,6 +583,26 @@ var marker = new google.maps.Marker({
 
 
     }
+
+function kamShowMapLoadError(){
+    var el = document.getElementById('google_world_map');
+    if (el) {
+        el.innerHTML = '<div class="km-empty-state" style="height:100%;">Map unavailable &mdash; the Google Maps API key is missing or invalid.</div>';
+    }
+}
+// Guard: if the Maps JS API failed to load (missing/invalid key, network
+// error), `google` never gets defined -- don't let that throw and break
+// the rest of the page, show a friendly placeholder instead. (No jQuery
+// dependency here -- jQuery itself is not loaded until further down this
+// page, so this can't wait on $(document).ready the way map.html/
+// results.html do; the maps <script> above is render-blocking, not
+// async/defer, so `google` is already settled one way or the other by the
+// time this line runs.)
+if (window.kamMapLoadFailed || typeof google === 'undefined' || !google.maps) {
+    kamShowMapLoadError();
+} else {
+    kamInitDeviceMap();
+}
 </script>
 
 

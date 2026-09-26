@@ -10,121 +10,90 @@
     <meta name="author" content="Colrolib">
     <meta name="keywords" content="Colrolib Templates">
 <link rel="stylesheet" href="{% static 'css/search_style.css'  %}">
-    <link rel="stylesheet" href="https://unpkg.com/bootstrap@3.3.7/dist/css/bootstrap.min.css" type="text/css" />
-  <link rel="stylesheet" href="https://unpkg.com/bootstrap-select@1.12.4/dist/css/bootstrap-select.min.css" type="text/css" />
-  <link rel="stylesheet" href="https://unpkg.com/bootstrap-select-country@4.0.0/dist/css/bootstrap-select-country.min.css" type="text/css" />
+    <link rel="stylesheet" href="{% static 'vendor/bootstrap/3.3.7/css/bootstrap.min.css' %}" type="text/css" />
+  <link rel="stylesheet" href="{% static 'vendor/bootstrap-select/1.12.4/css/bootstrap-select.min.css' %}" type="text/css" />
+  <link rel="stylesheet" href="{% static 'vendor/bootstrap-select-country/4.0.0/css/bootstrap-select-country.min.css' %}" type="text/css" />
 
 
-    <link href="https://unpkg.com/mobius1-selectr@latest/dist/selectr.min.css" rel="stylesheet" type="text/css">
-<script src="https://unpkg.com/mobius1-selectr@latest/dist/selectr.min.js" type="text/javascript"></script>
-    <link rel='stylesheet' href='https://fonts.googleapis.com/css?family=Raleway'>
-<link rel='stylesheet' href='https://fonts.googleapis.com/icon?family=Material+Icons'>
-<style>.dropdown-toggle.btn-default {
-  position: relative;
-padding: 0px 20px 5px 5px;
-border: 4px solid #444;
-width: 100%;
-background: #FFF;
-z-index: 1;
-margin: 0px;
-font-size: 16px;
-min-height: 58px;
-width:360%;
-}
-</style>
+    <link href="{% static 'vendor/selectr/2.4.13/selectr.min.css' %}" rel="stylesheet" type="text/css">
+<script src="{% static 'vendor/selectr/2.4.13/selectr.min.js' %}" type="text/javascript"></script>
+    <link rel="stylesheet" href="{% static 'vendor/material-icons/1.13.14/material-icons.css' %}">
+    <!-- Colors for the dropdown/Selectr/file-upload controls below now come
+         from kamerka-modern.css's design tokens (--km-*) instead of the
+         hardcoded hex this block used to carry; only non-color layout rules
+         (widths/padding/positioning) stay local to this page. -->
     <style>
-.dropdown-menu {
-     width:360%;
-}
-</style>
-    <style>
-        .selectr-selected {
-    position: relative;
-padding: 0px 20px 5px 5px;
-border: 4px solid #444;
-width: 100%;
-background: #FFF;
-z-index: 1;
-margin: 0px;
-font-size: 16px;
-min-height: 58px;
-}
-.selectr-placeholder {
-    color: black;
-    margin-top: 15px;
-}
-.selectr-tags {
-    padding: 5px;
+    .dropdown-toggle.btn-default {
+      position: relative;
+      padding: 0px 20px 5px 5px;
+      width: 100%;
+      z-index: 1;
+      margin: 0px;
+      font-size: 16px;
+      min-height: 58px;
+      width: 360%;
     }
-    .selectr-tag {
-
-    background: #1caf9a;
+    .dropdown-menu {
+      width: 360%;
     }
-    </style>
+    .selectr-selected {
+      position: relative;
+      padding: 0px 20px 5px 5px;
+      width: 100%;
+      z-index: 1;
+      margin: 0px;
+      font-size: 16px;
+      min-height: 58px;
+    }
+    .selectr-placeholder {
+      margin-top: 15px;
+    }
+    .selectr-tags {
+      padding: 5px;
+    }
 
-    <style>
-        .file-upload {
-  background-color: #ffffff;
-  width: 600px;
-  margin: 0 auto;
-  padding: 20px;
-}
-
-
-.file-upload-content {
-  display: none;
-  text-align: center;
-}
-
-.file-upload-input {
-  position: absolute;
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  outline: none;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.image-upload-wrap {
-  margin-top: 20px;
-  border: 4px dashed  #ff00cd;
-  position: relative;
-}
-
-.image-dropping,
-.image-upload-wrap:hover {
-  background-color: #00E1FF;
-  border: 4px dashed #ff00cd;
-}
-
-.image-title-wrap {
-  padding: 0 15px 15px 15px;
-  color: #222;
-}
-
-.drag-text {
-  text-align: center;
-}
-
-.drag-text h3 {
-  text-transform: uppercase;
-  color: #0064d7;
-  padding: 60px 0;
-  font-family: "Poppins", "Arial", "Helvetica Neue", sans-serif;
-font-weight: 500;
-font-size: 22px;
-}
-
-.file-upload-image {
-  max-height: 200px;
-  max-width: 200px;
-  margin: auto;
-  padding: 20px;
-}
-
-
+    .file-upload {
+      width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .file-upload-content {
+      display: none;
+      text-align: center;
+    }
+    .file-upload-input {
+      position: absolute;
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      outline: none;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .image-upload-wrap {
+      margin-top: 20px;
+      position: relative;
+    }
+    .image-title-wrap {
+      padding: 0 15px 15px 15px;
+    }
+    .drag-text {
+      text-align: center;
+    }
+    .drag-text h3 {
+      text-transform: uppercase;
+      padding: 60px 0;
+      font-family: "Poppins", "Arial", "Helvetica Neue", sans-serif;
+      font-weight: 500;
+      font-size: 22px;
+    }
+    .file-upload-image {
+      max-height: 200px;
+      max-width: 200px;
+      margin: auto;
+      padding: 20px;
+    }
     </style>
     <!-- Title Page-->
     <title>Search - ꓘamerka</title>
@@ -138,7 +107,7 @@ font-size: 22px;
         {% include '_nav.html' %}
     <div class="page-wrapper bg-img-1 p-t-200 p-b-120" id="background">
 
-        <div class="wrapper wrapper--w900">
+        <div class="wrapper wrapper--w900" id="main" tabindex="-1">
             <h1>ꓘamerka</h1>
             <div class="card card-4">
                 <div class="card-body">
@@ -164,7 +133,7 @@ font-size: 22px;
                     </ul>
                     <div class="tab-content">
                         <div class="tab-pane active" id="tab1">
-                                                                           <h3><center style="color: #00E1FF;">Country</center></h3>
+                                                                           <h3><center class="km-search-heading">Country</center></h3>
                             <form method="POST" action="" id="ics-search-form">
                                 {% csrf_token %}
 
@@ -172,7 +141,7 @@ font-size: 22px;
 
 <br>
                                 <br>
-                                                <h3><center style="color: #00E1FF;">Device</center></h3>
+                                                <h3><center class="km-search-heading">Device</center></h3>
 
                                                 <select id="ics_country" multiple name="ics_country">
                                                     <option value="__all__">-- All ICS families --</option>
@@ -346,7 +315,7 @@ font-size: 22px;
                                 <br>
 
 <button type="button" id="estimate_btn" class="btn-submit m-t-0">Estimate results (free)</button>
-<span id="estimate_result" style="margin-left:10px;color:#00E1FF;"></span>
+<span id="estimate_result" class="km-search-heading" style="margin-left:10px;"></span>
 <div id="credit_line" class="km-credit-line"></div>
 
                                 <br>
@@ -364,12 +333,12 @@ font-size: 22px;
 
                                                         <form method="POST" action="">
                                 {% csrf_token %}
-                                                           <h3><center style="color:#00E1FF;">Coordinates</center></h3>
+                                                           <h3><center class="km-search-heading">Coordinates</center></h3>
 
                                                             <section class="webdesigntuts-workshop">
 		<input type="search" name="coordinates" id="coordinates" placeholder="Search...">
 </section>
-                          <br>    <br><br><h3><center style="color:#00E1FF;">Camera</center></h3>
+                          <br>    <br><br><h3><center class="km-search-heading">Camera</center></h3>
 
                                                            <select multiple name="coordinates_search" id="cam" >
                                                       													 <option value="webcam">Webcam</option>
@@ -411,7 +380,7 @@ font-size: 22px;
                                                 </select>
 
                                         <br>
-                                                                                   <h3><center style="color:#00E1FF;">Other</center></h3>
+                                                                                   <h3><center class="km-search-heading">Other</center></h3>
 
                                 <select name="coordinates_search" id='other' multiple>
                                                      <option value="mqtt">MQTT</option>
@@ -427,7 +396,7 @@ font-size: 22px;
 
                                                 </select>
                                <br>
-                                   <h3><center style="color: #00E1FF;">ICS</center></h3>
+                                   <h3><center class="km-search-heading">ICS</center></h3>
                                                 <select name="coordinates_search" multiple id="icsiot">
                                                      <option value="niagara">Niagara</option>
   													<option value="modbus">Modbus</option>
@@ -566,7 +535,7 @@ font-size: 22px;
 
                         </div>
                          <div class="tab-pane" id="tab3">
-                                                                           <h3><center style="color: #00E1FF;">Country</center></h3>
+                                                                           <h3><center class="km-search-heading">Country</center></h3>
                             <form method="POST" action="">
                                 {% csrf_token %}
 
@@ -574,7 +543,7 @@ font-size: 22px;
 
 <br>
                                 <br>
-                                                <h3><center style="color: #00E1FF;">Device</center></h3>
+                                                <h3><center class="km-search-heading">Device</center></h3>
 
                                                 <select id="healthcare" multiple name="healthcare">
                                                     <option value="__all__">-- All Healthcare families --</option>
@@ -691,7 +660,6 @@ font-size: 22px;
 
 
 <!--  <button class="file-upload-btn" type="button" onclick="$('.file-upload-input').trigger( 'click' )">Add Image</button>-->
-<script class="jsbin" src="https://ajax.googleapis.com/ajax/libs/jquery/1/jquery.min.js"></script>
   <div class="image-upload-wrap">
     <input class="file-upload-input" type='file' name="myfile" onchange="readURL(this);"/>
     <div class="drag-text">
@@ -716,7 +684,7 @@ font-size: 22px;' class="image-title">
 
 
                         <div class="tab-pane" id="tab8">
-                                                                           <h3><center style="color: #00E1FF;">Country</center></h3>
+                                                                           <h3><center class="km-search-heading">Country</center></h3>
                             <form method="POST" action="">
                                 {% csrf_token %}
 
@@ -724,7 +692,7 @@ font-size: 22px;' class="image-title">
 
 <br>
                                 <br>
-                                                <h3><center style="color: #00E1FF;">Device</center></h3>
+                                                <h3><center class="km-search-heading">Device</center></h3>
 
                                                 <select id="infra" multiple name="infra">
 
@@ -768,9 +736,9 @@ font-size: 22px;' class="image-title">
     </div>
 
 
-     <script src="https://unpkg.com/jquery@3.4.1/dist/jquery.min.js"></script>
-  <script src="https://unpkg.com/bootstrap@3.3.7/dist/js/bootstrap.min.js"></script>
-  <script src="https://unpkg.com/bootstrap-select@1.12.4/dist/js/bootstrap-select.min.js"></script>
+     <script src="{% static 'vendor/jquery/3.4.1/jquery.min.js' %}"></script>
+  <script src="{% static 'vendor/bootstrap/3.3.7/js/bootstrap.min.js' %}"></script>
+  <script src="{% static 'vendor/bootstrap-select/1.12.4/js/bootstrap-select.min.js' %}"></script>
   <script src="{% static 'js/bootstrap-select-country.js'  %}"></script>
 <script>
     function readURL(input) {

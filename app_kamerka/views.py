@@ -280,6 +280,26 @@ def index(request):
     task = request.session.get('task_id')
     ports = Device.objects.values('port').annotate(c=Count('port')).order_by('-c')[:7]
     ports_list = list(ports)
+
+    # Dashboard density (Stage 2): a handful of extra one-line aggregations
+    # so the dashboard is useful at 100+ devices instead of just showing the
+    # same handful of small charts. All plain ORM, no extra queries beyond
+    # what's already here.
+    honeypot_count = Device.objects.filter(honeypot_score__gte=HONEYPOT_THRESHOLD).count()
+    country_count = Device.objects.exclude(country_code__isnull=True).exclude(country_code='') \
+        .values('country_code').distinct().count()
+    top_types = list(
+        Device.objects.exclude(type='').values('type').annotate(c=Count('type')).order_by('-c')[:8]
+    )
+    top_orgs = list(
+        Device.objects.exclude(org__isnull=True).exclude(org='')
+        .values('org').annotate(c=Count('org')).order_by('-c')[:8]
+    )
+    recent_devices = list(
+        Device.objects.order_by('-id')
+        .only('id', 'ip', 'type', 'org', 'country_code', 'port', 'honeypot_score', 'search_id')[:10]
+    )
+
     vulns = Device.objects.exclude(vulns__isnull=True).exclude(vulns__exact='')
 
     vulns_list = []
@@ -315,15 +335,12 @@ def index(request):
         except Exception as e:
             logger.info("index: failed to parse coordinates_search for search %s: %s", j.id, e)
 
-    credits = check_credits()
-    # credits is a plain list from kamerka.tasks.check_credits(): index 0 is
-    # the Shodan query-credit count, index 1 is the BinaryEdge requests-left
-    # count, and either (or both) may simply be absent if that API call
-    # failed/is unconfigured -- rather than let the template silently render
-    # an empty tile, resolve each to an explicit value or None here (the
-    # template renders None as "n/a").
-    shodan_credits = credits[0] if len(credits) > 0 else None
-    binaryedge_credits = credits[1] if len(credits) > 1 else None
+    # NOTE: this used to call check_credits() synchronously here, which hits
+    # both the Shodan and BinaryEdge APIs on every single dashboard render --
+    # slow, and it hangs/fails the whole page if either is offline or
+    # unconfigured. The credits tile now loads via the existing `get_credits`
+    # AJAX endpoint (index.html JS, fired after page paint), so the page
+    # itself never blocks on a remote API call.
 
     context = {'device': all_devices,
                "search": last_5_searches,
@@ -335,9 +352,11 @@ def index(request):
                'vulns': sort,
                "task_id": task,
                "search_len": search_all,
-               "credits": credits,
-               "shodan_credits": shodan_credits,
-               "binaryedge_credits": binaryedge_credits}
+               "honeypot_count": honeypot_count,
+               "country_count": country_count,
+               "top_types": top_types,
+               "top_orgs": top_orgs,
+               "recent_devices": recent_devices}
     return render(request, 'index.html', context)
 
 
@@ -351,6 +370,7 @@ def filter_devices(request):
       - type: exact match on Device.type (device family)
       - category: exact match on Device.category (ics/healthcare/infra/coordinates)
       - country: match on Device.country_code (case-insensitive)
+      - org: substring match (case-insensitive) against Device.org
       - search_id: restrict to a single Search's devices
       - vuln: substring match against the stored vulns (a CVE id)
       - honeypot: truthy (e.g. "1") restricts to devices whose local
@@ -389,6 +409,11 @@ def filter_devices(request):
     if country:
         all_devices = all_devices.filter(country_code__iexact=country)
         filters['country'] = country
+
+    org = request.GET.get('org')
+    if org:
+        all_devices = all_devices.filter(org__icontains=org)
+        filters['org'] = org
 
     search_id = request.GET.get('search_id')
     if search_id:
