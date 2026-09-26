@@ -75,6 +75,20 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Nairobi'
 CELERY_IMPORTS = ('kamerka.tasks',)
+# scan_task/exploit_task (active Nmap scanning and exploitation probes) are
+# pinned to a dedicated 'active' queue via @shared_task(queue='active') in
+# kamerka/tasks.py. That lets a deployment run a separate worker consuming
+# only the 'active' queue -- e.g. `celery -A kamerka worker -Q active` -- on
+# network-isolated infrastructure, while the default worker (`celery -A
+# kamerka worker -Q celery`) handles everything else (shodan_search,
+# devices_nearby, whoisxml, etc). CELERY_TASK_ROUTES is left commented out
+# below as the alternative way to assign queues (by task name, without
+# touching the decorator) in case a deployment prefers to route tasks this
+# way instead:
+# CELERY_TASK_ROUTES = {
+#     'kamerka.tasks.scan_task': {'queue': 'active'},
+#     'kamerka.tasks.exploit_task': {'queue': 'active'},
+# }
 # Celery 6 will require the worker to explicitly opt in to retrying its
 # initial broker connection on startup; set it now to silence the
 # deprecation warning under Celery 5.

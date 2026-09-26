@@ -1367,33 +1367,37 @@ class ActiveOpsFeatureFlagTests(TestCase):
         self.device = Device.objects.create(search=self.search, ip='5.5.5.5', type='modbus', category='ics')
 
     def test_scan_disabled_by_default_returns_403_and_does_not_scan(self):
-        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
             response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 403)
             self.assertIn('disabled', response.json()['Error'].lower())
             mocked_scan.assert_not_called()
 
     def test_exploit_disabled_by_default_returns_403_and_does_not_exploit(self):
-        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
             response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 403)
             self.assertIn('disabled', response.json()['Error'].lower())
             mocked_exploit.assert_not_called()
 
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
-    def test_scan_enabled_calls_through_and_returns_200(self):
-        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}) as mocked_scan:
+    def test_scan_enabled_enqueues_task_and_returns_task_id(self):
+        with mock.patch(
+            'app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')
+        ) as mocked_scan:
             response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {'State': 'open'})
+            self.assertEqual(response.json(), {'task_id': 'scan-task'})
             mocked_scan.assert_called_once_with(str(self.device.id))
 
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
-    def test_exploit_enabled_calls_through_and_returns_200(self):
-        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}) as mocked_exploit:
+    def test_exploit_enabled_enqueues_task_and_returns_task_id(self):
+        with mock.patch(
+            'app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')
+        ) as mocked_exploit:
             response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {'Success': 'done'})
+            self.assertEqual(response.json(), {'task_id': 'exploit-task'})
             mocked_exploit.assert_called_once_with(str(self.device.id))
 
     def test_scan_get_is_405(self):
@@ -1414,7 +1418,9 @@ class ActiveOpsFeatureFlagTests(TestCase):
 
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_creates_audit_log_row(self):
-        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}):
+        with mock.patch(
+            'app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')
+        ):
             response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(AuditLog.objects.count(), 1)
@@ -1425,7 +1431,9 @@ class ActiveOpsFeatureFlagTests(TestCase):
 
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_creates_audit_log_row(self):
-        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}):
+        with mock.patch(
+            'app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')
+        ):
             response = self.client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(AuditLog.objects.count(), 1)
@@ -1514,7 +1522,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_viewer_gets_403_on_active_scan_endpoint(self):
         client = self._login('viewer4', groups=['Viewer'])
-        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1522,7 +1530,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_viewer_gets_403_on_exploit_endpoint(self):
         client = self._login('viewer5', groups=['Viewer'])
-        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1541,7 +1549,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_analyst_gets_403_on_active_scan(self):
         client = self._login('analyst2', groups=['Analyst'])
-        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1549,7 +1557,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_analyst_gets_403_on_exploit(self):
         client = self._login('analyst3', groups=['Analyst'])
-        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1559,7 +1567,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_active_scanner_can_scan_with_scope(self):
         client = self._login('scanner1', groups=['Active Scanner'])
-        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}) as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         mocked_scan.assert_called_once_with(str(self.device.id))
@@ -1567,7 +1575,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_active_scanner_gets_403_on_exploit(self):
         client = self._login('scanner2', groups=['Active Scanner'])
-        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1577,7 +1585,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_operator_can_exploit_with_scope(self):
         client = self._login('exploiter1', groups=['Exploit Operator'])
-        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}) as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')) as mocked_exploit:
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         mocked_exploit.assert_called_once_with(str(self.device.id))
@@ -1586,7 +1594,7 @@ class CapabilityRoleTests(TestCase):
     def test_exploit_operator_can_also_scan_with_scope(self):
         # Exploit Operator is cumulative: it also holds active_scan.
         client = self._login('exploiter2', groups=['Exploit Operator'])
-        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}) as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         mocked_scan.assert_called_once_with(str(self.device.id))
@@ -1604,11 +1612,11 @@ class CapabilityRoleTests(TestCase):
             response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
 
-        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}):
+        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')):
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
 
-        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}):
+        with mock.patch('app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')):
             response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
 
@@ -1671,7 +1679,7 @@ class TargetScopeAuthorizationTests(TestCase):
 
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_denied_with_no_authorization(self):
-        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         self.assertIn('scope', response.json()['Error'].lower())
@@ -1680,7 +1688,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_succeeds_with_in_scope_authorization(self):
         make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
-        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}) as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         mocked_scan.assert_called_once_with(str(self.device.id))
@@ -1691,7 +1699,7 @@ class TargetScopeAuthorizationTests(TestCase):
             cidr='203.0.113.0/24', allow_port_scan=True,
             expires_at=timezone.now() - timezone.timedelta(minutes=1),
         )
-        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1699,7 +1707,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_denied_when_authorization_lacks_port_scan_flag(self):
         make_authorization(cidr='203.0.113.0/24', allow_port_scan=False, allow_exploit=True)
-        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1707,7 +1715,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_denied_when_ip_outside_cidr(self):
         make_authorization(cidr='198.51.100.0/24', allow_port_scan=True, allow_exploit=True)
-        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1726,7 +1734,7 @@ class TargetScopeAuthorizationTests(TestCase):
 
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_denied_with_no_authorization(self):
-        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         self.assertIn('scope', response.json()['Error'].lower())
@@ -1735,7 +1743,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_succeeds_with_in_scope_authorization(self):
         make_authorization(cidr='203.0.113.0/24', allow_port_scan=False, allow_exploit=True)
-        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}) as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay', return_value=_FakeAsyncResult('exploit-task')) as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         mocked_exploit.assert_called_once_with(str(self.device.id))
@@ -1746,7 +1754,7 @@ class TargetScopeAuthorizationTests(TestCase):
             cidr='203.0.113.0/24', allow_exploit=True,
             expires_at=timezone.now() - timezone.timedelta(minutes=1),
         )
-        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1754,7 +1762,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_denied_when_authorization_lacks_exploit_flag(self):
         make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
-        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -1762,7 +1770,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_denied_when_ip_outside_cidr(self):
         make_authorization(cidr='198.51.100.0/24', allow_port_scan=True, allow_exploit=True)
-        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+        with mock.patch('app_kamerka.views.exploit_task.delay') as mocked_exploit:
             response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_exploit.assert_not_called()
@@ -2248,3 +2256,102 @@ class LegacyJsonFieldMigrationConversionTests(TestCase):
 
     def test_parse_dict_like_non_dict_repr_is_empty_dict(self):
         self.assertEqual(self.parse_dict_like("['not', 'a', 'dict']"), {})
+
+
+class ScanExploitTaskTests(TestCase):
+    """Direct tests of the scan_task/exploit_task Celery task functions
+    (kamerka/tasks.py), with Nmap and the exploit probes mocked out -- no
+    real network access or nmap binary is used. These confirm the tasks
+    persist their result to the device row and return the expected dict,
+    independent of the (now async) scan_dev/exploit_dev views that enqueue
+    them -- see ActiveOpsFeatureFlagTests/TargetScopeAuthorizationTests for
+    the view-level enqueue behaviour."""
+
+    def setUp(self):
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+
+    def _fake_nmap(self, stdout):
+        instance = mock.Mock()
+        instance.is_running.return_value = False
+        instance.run_background.return_value = None
+        instance.stdout = stdout
+        return mock.Mock(return_value=instance)
+
+    def test_scan_task_plain_nmap_scan_persists_and_returns_state(self):
+        # A non-ICS device type takes the plain "-p <port>" nmap branch
+        # (no nmap_scripts/*.nse), which reports open/closed state.
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.20', port='80', type='hikvision', category='ipcam',
+        )
+        xml = (
+            b'<nmaprun><host><ports><port>'
+            b'<state state="open" reason="syn-ack"/>'
+            b'</port></ports></host></nmaprun>'
+        )
+        with mock.patch.object(tasks, 'NmapProcess', self._fake_nmap(xml)) as mocked_cls:
+            result = tasks.scan_task(device.id)
+
+        mocked_cls.assert_called_once()
+        self.assertEqual(result, {'State': 'open', 'Reason': 'syn-ack'})
+        device.refresh_from_db()
+        self.assertEqual(device.scan, {'State': 'open', 'Reason': 'syn-ack'})
+        self.assertTrue(device.exploited_scanned)
+
+    def test_scan_task_ics_nmap_script_scan_persists_and_returns_output(self):
+        # An ICS device type (modbus is in tasks.ics_scan) instead runs the
+        # matching NSE script and reports its @id/@output.
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.21', port='502', type='modbus', category='ics',
+        )
+        xml = (
+            b'<nmaprun><host><ports><port>'
+            b'<script id="modbus-discover" output="Slave ID data: 1"/>'
+            b'</port></ports></host></nmaprun>'
+        )
+        with mock.patch.object(tasks, 'NmapProcess', self._fake_nmap(xml)) as mocked_cls:
+            result = tasks.scan_task(device.id)
+
+        mocked_cls.assert_called_once()
+        self.assertEqual(result, {'ID': 'modbus-discover', 'Output': 'Slave ID data: 1'})
+        device.refresh_from_db()
+        self.assertEqual(device.scan, {'ID': 'modbus-discover', 'Output': 'Slave ID data: 1'})
+        self.assertTrue(device.exploited_scanned)
+
+    def test_scan_task_is_routed_to_the_active_queue(self):
+        self.assertEqual(tasks.scan_task.queue, 'active')
+
+    def test_exploit_task_is_routed_to_the_active_queue(self):
+        self.assertEqual(tasks.exploit_task.queue, 'active')
+
+    def test_exploit_task_unknown_type_returns_no_exploit_assigned(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.22', port='80', type='some_unhandled_type', category='ipcam',
+        )
+        result = tasks.exploit_task(device.id)
+        self.assertEqual(result, {'Reason': 'No exploit assigned'})
+
+    def test_exploit_task_dispatches_to_matching_exploit_and_persists(self):
+        # exploit_task() itself just routes by device.type to the matching
+        # app_kamerka.exploits.* probe; persistence to device.exploit
+        # happens inside that probe (see app_kamerka/exploits.py). Mock the
+        # probe (no real network/credential-guessing) but have it persist,
+        # the way the real ones do, to confirm the task's return value and
+        # the persisted row line up.
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.23', port='23', type='lutron', category='ics',
+        )
+
+        def fake_lutron(dev):
+            dev.exploit = {'Success': 'lutron config retrieved'}
+            dev.exploited_scanned = True
+            dev.save()
+            return {'Success': 'lutron config retrieved'}
+
+        with mock.patch.object(tasks.exploits, 'lutron', side_effect=fake_lutron) as mocked_lutron:
+            result = tasks.exploit_task(device.id)
+
+        mocked_lutron.assert_called_once()
+        self.assertEqual(result, {'Success': 'lutron config retrieved'})
+        device.refresh_from_db()
+        self.assertEqual(device.exploit, {'Success': 'lutron config retrieved'})
+        self.assertTrue(device.exploited_scanned)

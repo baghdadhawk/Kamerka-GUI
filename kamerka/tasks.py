@@ -1299,8 +1299,17 @@ ics_scan = {"dnp3": "--script=nmap_scripts/dnp3-info.nse", "niagara": "--script=
             "tank": "--script=nmap_scripts/atg-info.nse", "modicon": "--script=nmap_scripts/modicon-info.nse"}
 
 
-@shared_task(bind=False)
-def scan(id):
+@shared_task(bind=False, queue='active')
+def scan_task(id):
+    """Active Nmap scan of a single device.
+
+    Routed to the dedicated 'active' Celery queue (see kamerka/settings.py
+    CELERY_TASK_ROUTES) so deployments can run a worker consuming that queue
+    on separate, network-isolated infrastructure from the default worker.
+    Runs on a worker, not the request thread -- see scan_dev() in
+    app_kamerka/views.py, which enqueues this via .delay(id) and returns the
+    task id for polling instead of blocking on Nmap.
+    """
     return_dict = {}
     device1 = Device.objects.get(id=id)
     ip = device1.ip
@@ -1364,8 +1373,15 @@ def scan(id):
             logger.warning("Nmap plain scan failed to parse output: %s", e)
 
 
-@shared_task(bind=False)
-def exploit(id):
+@shared_task(bind=False, queue='active')
+def exploit_task(id):
+    """Active exploitation/credential-check probe of a single device.
+
+    Routed to the dedicated 'active' Celery queue -- see scan_task() above.
+    Runs on a worker, not the request thread -- see exploit_dev() in
+    app_kamerka/views.py, which enqueues this via .delay(id) and returns the
+    task id for polling instead of blocking on the exploit probe.
+    """
     device1 = Device.objects.get(id=id)
     logger.info("exploit() for device type: %s", device1.type)
     if device1.type == "bosch_security":

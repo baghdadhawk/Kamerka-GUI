@@ -22,8 +22,8 @@ from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryE
 from app_kamerka.authz import require_capability, is_target_authorized
 from django.conf import settings
 from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
-    binary_edge_scan, whoisxml, check_credits, nmap_scan, validate_nmap, validate_maxmind, scan, \
-    exploit, build_family_selection, count_devices, honeyscore
+    binary_edge_scan, whoisxml, check_credits, nmap_scan, validate_nmap, validate_maxmind, scan_task, \
+    exploit_task, build_family_selection, count_devices, honeyscore
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import HONEYPOT_THRESHOLD
 from app_kamerka.sightings import other_sightings
@@ -943,14 +943,10 @@ def scan_dev(request, id):
                 json.dumps({'Error': "target not within an authorized scan scope"}),
                 content_type='application/json', status=403,
             )
-        res = scan(id)
-        if res:
-            record_audit(request, 'scan', device=_get_device_or_none(id), target=str(id), detail=res)
-            return HttpResponse(json.dumps(res), content_type='application/json')
-        else:
-            record_audit(request, 'scan', device=_get_device_or_none(id), target=str(id), success=False,
-                         detail='Connection Error')
-            return HttpResponse(json.dumps({'Error': "Connection Error"}), content_type='application/json')
+        scan_task_result = scan_task.delay(id)
+        record_audit(request, 'scan', device=_get_device_or_none(id), target=str(id),
+                     detail={'task_id': scan_task_result.id})
+        return HttpResponse(json.dumps({'task_id': scan_task_result.id}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
@@ -975,14 +971,10 @@ def exploit_dev(request, id):
                 json.dumps({'Error': "target not within an authorized exploit scope"}),
                 content_type='application/json', status=403,
             )
-        res = exploit(id)
-        if res:
-            record_audit(request, 'exploit', device=_get_device_or_none(id), target=str(id), detail=res)
-            return HttpResponse(json.dumps(res), content_type='application/json')
-        else:
-            record_audit(request, 'exploit', device=_get_device_or_none(id), target=str(id), success=False,
-                         detail='Connection Error')
-            return HttpResponse(json.dumps({'Error': "Connection Error"}), content_type='application/json')
+        exploit_task_result = exploit_task.delay(id)
+        record_audit(request, 'exploit', device=_get_device_or_none(id), target=str(id),
+                     detail={'task_id': exploit_task_result.id})
+        return HttpResponse(json.dumps({'task_id': exploit_task_result.id}), content_type='application/json')
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 

@@ -279,9 +279,49 @@ chosen specifically so port -> family classification is unambiguous.
   - `KAMERKA_ENABLE_EXPLOITATION` -- must be set to enable
     `exploit_dev`/`GET /exploit/<id>`.
   When a flag is off, its endpoint returns HTTP 403 with a JSON `Error`
-  message and never calls `scan()`/`exploit()`. The device page's Scan and
-  Exploit buttons are disabled (with a "disabled by configuration" note)
-  when their flag is off, without changing the buttons' ids/hooks. Set
-  both env vars to a truthy value (`1`/`true`/`yes`/`on`) only in an
-  environment where you intend to run active scans/exploits against
-  devices you're authorized to touch.
+  message and never enqueues `scan_task`/`exploit_task` (see below). The
+  device page's Scan and Exploit buttons are disabled (with a "disabled by
+  configuration" note) when their flag is off, without changing the
+  buttons' ids/hooks. Set both env vars to a truthy value
+  (`1`/`true`/`yes`/`on`) only in an environment where you intend to run
+  active scans/exploits against devices you're authorized to touch.
+
+## Active scanning and exploitation moved to Celery (dedicated `active` queue)
+
+- **`scan_dev`/`exploit_dev` no longer block the request worker on Nmap.**
+  Previously they called `scan(id)`/`exploit(id)` inline, and `scan()` did
+  `while nm.is_running(): sleep(2)` -- so a single Nmap scan (or exploit
+  probe) held a Django request-handling thread/worker for its whole
+  duration. `scan()`/`exploit()` are now the Celery tasks `scan_task`/
+  `exploit_task` in `kamerka/tasks.py` (unchanged logic; they still persist
+  their result to `Device.scan`/`Device.exploit` and return the same result
+  dict). The views now only do the synchronous pre-checks that must happen
+  in the request -- login, POST/CSRF, the `KAMERKA_ENABLE_ACTIVE_SCAN`/
+  `KAMERKA_ENABLE_EXPLOITATION` flag, `require_capability`
+  (`active_scan`/`exploit`), `is_target_authorized` scope, and the
+  `record_audit` row -- then enqueue `scan_task.delay(id)` /
+  `exploit_task.delay(id)` and return `{"task_id": <id>}`, the same
+  `task_id` + `/get-task-info/` polling pattern already used by
+  `nearby`/`shodan_scan`. The device page's Scan/Exploit buttons now show a
+  "Running..." state and poll `/get-task-info/` until the task reaches
+  `SUCCESS` (or another terminal state) before rendering the result into
+  the existing `#scan_results`/`#exploit_results` containers; a 403 from
+  the initial POST (flag off / capability denied / target out of scope) is
+  shown immediately instead of being polled.
+- **`scan_task`/`exploit_task` are routed to a dedicated `active` Celery
+  queue** (`@shared_task(queue='active')` in `kamerka/tasks.py`; see the
+  commented-out `CELERY_TASK_ROUTES` alternative in `kamerka/settings.py`
+  if you'd rather route by task name instead of the decorator). Every
+  other task (`shodan_search`, `devices_nearby`, `shodan_scan_task`,
+  `whoisxml`, `binary_edge_scan`, `nmap_scan`, ...) stays on the default
+  `celery` queue. This split is what makes it possible to run active
+  scanning/exploitation on separate, network-isolated infrastructure:
+  point one worker at only the `active` queue --
+  `celery -A kamerka worker -Q active --hostname active@%h` -- and run it
+  in its own container or VM with restricted/monitored egress (it is the
+  only thing in the deployment that reaches out to arbitrary
+  attacker-chosen-scope IPs), while the default worker
+  (`celery -A kamerka worker -Q celery`) handles the rest of the app's
+  background work on ordinary infrastructure. If you only run one worker
+  today, add `-Q celery,active` to that single worker's command line so it
+  keeps consuming both queues; nothing else changes.

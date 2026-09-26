@@ -836,49 +836,93 @@ $('#honeyscore_check').on('click', function(){
         return false;
     });
 
+// Scan/Exploit now run on a Celery worker (the dedicated 'active' queue --
+// see kamerka/tasks.py scan_task/exploit_task) instead of blocking the
+// request on Nmap/exploit probes. The POST just enqueues the task and
+// returns a task_id (or a 403 with an Error if the feature flag/capability/
+// scope check fails); the result is fetched by polling get-task-info/ the
+// same way nearby/shodan_scan already do.
+var pgrbar7 = $('#progress-bar7');
+var pgrbar8 = $('#progress-bar8');
+
+function poll_active_op_result(task_id, pgrbar, resultSelector) {
+    $.ajax({
+        type: 'get',
+        url: '/get-task-info/',
+        data: {'task_id': task_id},
+        success: function (data) {
+            if (data.state == 'PENDING' || data.state == 'PROGRESS' || data.state == 'STARTED' || data.state == 'RETRY') {
+                setTimeout(function () {
+                    poll_active_op_result(task_id, pgrbar, resultSelector);
+                }, 2000);
+            } else if (data.state == 'SUCCESS') {
+                pgrbar.css('display', 'none');
+                $(resultSelector).html(library.json.prettyPrint(data.result));
+                if (data.result && data.result.Error) {
+                    noty({text: data.result.Error, layout: 'topRight', type: 'error', timeout: 10000});
+                } else {
+                    noty({text: "Done", layout: 'topRight', type: 'success', timeout: 5000});
+                }
+            } else {
+                pgrbar.css('display', 'none');
+                $(resultSelector).html('Task ' + data.state + '.');
+                noty({text: "Task " + data.state, layout: 'topRight', type: 'error', timeout: 10000});
+            }
+        },
+        error: function () {
+            pgrbar.css('display', 'none');
+            $(resultSelector).html('Something went wrong!');
+        }
+    });
+}
+
 $('#scan').on('click', function(){
+       pgrbar7.css('display', 'block').val(0);
+       $('#scan_results').html('Running...');
        $.ajax({
         type: "POST",
         url: "/scan/{{device.id}}",
         success: function (data) {
-           console.log(data);
-           $('#scan_results').html(library.json.prettyPrint(data));
-
-        if (data.Success){
-                console.log(data);
-                noty({text: data.Success , layout: 'topRight', type: 'success', timeout: 10000});
-
-}
-                if (data.Error){
-                noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 10000});
+                if (data.task_id != null) {
+                    poll_active_op_result(data.task_id, pgrbar7, '#scan_results');
+                } else if (data.Error) {
+                    pgrbar7.css('display', 'none');
+                    $('#scan_results').html(data.Error);
+                    noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 10000});
                 }
             },
-            error: function (data) {
-                console.log("Something went wrong!");
+            error: function (xhr) {
+                pgrbar7.css('display', 'none');
+                var msg = "Something went wrong!";
+                try { msg = JSON.parse(xhr.responseText).Error || msg; } catch (e) {}
+                $('#scan_results').html(msg);
+                noty({text: msg , layout: 'topRight', type: 'error', timeout: 10000});
             }
         });
         return false;
     });
 
 $('#exploit').on('click', function(){
+       pgrbar8.css('display', 'block').val(0);
+       $('#exploit_results').html('Running...');
        $.ajax({
         type: "POST",
         url: "/exploit/{{device.id}}",
         success: function (data) {
-           console.log(data);
-           $('#exploit_results').html(library.json.prettyPrint(data));
-
-        if (data.Success){
-                console.log(data);
-                noty({text: data.Success , layout: 'topRight', type: 'success', timeout: 10000});
-
-}
-                if (data.Error){
-                noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 10000});
+                if (data.task_id != null) {
+                    poll_active_op_result(data.task_id, pgrbar8, '#exploit_results');
+                } else if (data.Error) {
+                    pgrbar8.css('display', 'none');
+                    $('#exploit_results').html(data.Error);
+                    noty({text: data.Error , layout: 'topRight', type: 'error', timeout: 10000});
                 }
             },
-            error: function (data) {
-                console.log("Something went wrong!");
+            error: function (xhr) {
+                pgrbar8.css('display', 'none');
+                var msg = "Something went wrong!";
+                try { msg = JSON.parse(xhr.responseText).Error || msg; } catch (e) {}
+                $('#exploit_results').html(msg);
+                noty({text: msg , layout: 'topRight', type: 'error', timeout: 10000});
             }
         });
         return false;
