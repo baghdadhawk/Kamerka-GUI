@@ -45,6 +45,7 @@ ACTIVE_USER_AGENT = "Kamerka/1.0 (+https://github.com/woj-ciech/Kamerka; active-
 # (connect_timeout, read_timeout) tuples, in seconds.
 PASSIVE_TIMEOUT = (5, 15)
 ACTIVE_TIMEOUT = (3, 8)
+ACTIVE_MAX_DURATION = 20
 
 PASSIVE_MAX_RETRIES = 2
 PASSIVE_BACKOFF_FACTOR = 0.5
@@ -193,18 +194,44 @@ class ActiveClient:
     - A descriptive User-Agent is sent.
     """
 
-    def __init__(self, timeout=ACTIVE_TIMEOUT, user_agent=ACTIVE_USER_AGENT):
+    def __init__(self, timeout=ACTIVE_TIMEOUT, user_agent=ACTIVE_USER_AGENT,
+                 max_response_bytes=MAX_RESPONSE_BYTES, max_duration=ACTIVE_MAX_DURATION):
         self.timeout = timeout
         self.user_agent = user_agent
+        self.max_response_bytes = max_response_bytes
+        self.max_duration = max_duration
 
     def _request(self, method, url, verify=True, **kwargs):
         kwargs.setdefault("timeout", self.timeout)
+        if kwargs.get('allow_redirects', False):
+            raise ValueError('ActiveClient does not follow redirects')
+        kwargs['allow_redirects'] = False
+        kwargs["stream"] = True
 
         headers = dict(kwargs.pop("headers", None) or {})
         headers.setdefault("User-Agent", self.user_agent)
         kwargs["headers"] = headers
 
-        return requests.request(method, url, verify=verify, **kwargs)
+        max_bytes = kwargs.pop('max_response_bytes', self.max_response_bytes)
+        response = requests.request(method, url, verify=verify, **kwargs)
+        deadline = time.monotonic() + self.max_duration
+        total = 0
+        chunks = []
+        try:
+            for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                if time.monotonic() > deadline:
+                    raise requests.exceptions.Timeout('Active response exceeded time limit')
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ResponseTooLarge('Response body exceeded %d bytes limit' % max_bytes)
+                chunks.append(chunk)
+            response._content = b''.join(chunks)
+            response._content_consumed = True
+            return response
+        finally:
+            response.close()
 
     def get(self, url, verify=True, **kwargs):
         return self._request("GET", url, verify=verify, **kwargs)

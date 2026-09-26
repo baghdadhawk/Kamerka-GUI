@@ -14,7 +14,7 @@ from app_kamerka.authz import is_target_authorized
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import score_device, HONEYPOT_THRESHOLD
 from app_kamerka.models import (
-    AuditLog, Device, ExploitTaskAccess, GeneralTaskResultAccess, ScanAuthorization, Search,
+    AuditLog, Device, ExploitTaskAccess, GeneralTaskResultAccess, Operation, ScanAuthorization, Search,
 )
 from app_kamerka.net import (
     ActiveClient,
@@ -1373,7 +1373,7 @@ class ActiveOpsFeatureFlagTests(TestCase):
         self.device = Device.objects.create(search=self.search, ip='5.5.5.5', type='modbus', category='ics')
 
     def test_scan_disabled_by_default_returns_403_and_does_not_scan(self):
-        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async') as mocked_scan:
             response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 403)
             self.assertIn('disabled', response.json()['Error'].lower())
@@ -1389,13 +1389,14 @@ class ActiveOpsFeatureFlagTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_enabled_enqueues_task_and_returns_task_id(self):
         with mock.patch(
-            'app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')
+            'app_kamerka.views.scan_task.apply_async', return_value=_FakeAsyncResult('scan-task')
         ) as mocked_scan:
             response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {'task_id': 'scan-task'})
-            mocked_scan.assert_called_once_with(str(self.device.id))
-            self.assertTrue(GeneralTaskResultAccess.objects.filter(task_id='scan-task').exists())
+            self.assertIn('task_id', response.json())
+            self.assertIn('operation_id', response.json())
+            self.assertEqual(mocked_scan.call_args.kwargs['args'], [str(self.device.id)])
+            self.assertTrue(GeneralTaskResultAccess.objects.filter(task_id=response.json()['task_id']).exists())
 
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_exploit_enabled_enqueues_task_and_returns_task_id(self):
@@ -1430,13 +1431,13 @@ class ActiveOpsFeatureFlagTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_creates_audit_log_row(self):
         with mock.patch(
-            'app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')
+            'app_kamerka.views.scan_task.apply_async', return_value=_FakeAsyncResult('scan-task')
         ):
             response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(AuditLog.objects.count(), 1)
         row = AuditLog.objects.get()
-        self.assertEqual(row.action, 'scan')
+        self.assertEqual(row.action, 'operation_queued')
         self.assertEqual(row.device_id, self.device.id)
         self.assertTrue(row.success)
 
@@ -1449,7 +1450,7 @@ class ActiveOpsFeatureFlagTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(AuditLog.objects.count(), 1)
         row = AuditLog.objects.get()
-        self.assertEqual(row.action, 'exploit')
+        self.assertEqual(row.action, 'operation_queued')
         self.assertEqual(row.device_id, self.device.id)
         self.assertTrue(row.success)
 
@@ -1457,7 +1458,7 @@ class ActiveOpsFeatureFlagTests(TestCase):
         # A capable caller whose active-scan attempt is refused purely because
         # the feature flag is off must still leave an audit trail (the denial
         # is recorded before the 403 returns), same as capability/scope denials.
-        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async') as mocked_scan:
             response = self.client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1654,7 +1655,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_viewer_gets_403_on_active_scan_endpoint(self):
         client = self._login('viewer4', groups=['Viewer'])
-        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async') as mocked_scan:
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1681,7 +1682,7 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_analyst_gets_403_on_active_scan(self):
         client = self._login('analyst2', groups=['Analyst'])
-        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async') as mocked_scan:
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1699,10 +1700,10 @@ class CapabilityRoleTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_active_scanner_can_scan_with_scope(self):
         client = self._login('scanner1', groups=['Active Scanner'])
-        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
-        mocked_scan.assert_called_once_with(str(self.device.id))
+        self.assertEqual(mocked_scan.call_args.kwargs['args'], [str(self.device.id)])
 
     @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
     def test_active_scanner_gets_403_on_exploit(self):
@@ -1728,10 +1729,10 @@ class CapabilityRoleTests(TestCase):
     def test_exploit_operator_can_also_scan_with_scope(self):
         # Exploit Operator is cumulative: it also holds active_scan.
         client = self._login('exploiter2', groups=['Exploit Operator'])
-        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
-        mocked_scan.assert_called_once_with(str(self.device.id))
+        self.assertEqual(mocked_scan.call_args.kwargs['args'], [str(self.device.id)])
 
     # -- superuser: passes every check regardless of group ------------------
 
@@ -1746,7 +1747,7 @@ class CapabilityRoleTests(TestCase):
             response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
 
-        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')):
+        with mock.patch('app_kamerka.views.scan_task.apply_async', return_value=_FakeAsyncResult('scan-task')):
             response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
 
@@ -1813,7 +1814,7 @@ class TargetScopeAuthorizationTests(TestCase):
 
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_denied_with_no_authorization(self):
-        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async') as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         self.assertIn('scope', response.json()['Error'].lower())
@@ -1822,10 +1823,10 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_succeeds_with_in_scope_authorization(self):
         make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
-        with mock.patch('app_kamerka.views.scan_task.delay', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async', return_value=_FakeAsyncResult('scan-task')) as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 200)
-        mocked_scan.assert_called_once_with(str(self.device.id))
+        self.assertEqual(mocked_scan.call_args.kwargs['args'], [str(self.device.id)])
 
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_denied_when_authorization_expired(self):
@@ -1833,7 +1834,7 @@ class TargetScopeAuthorizationTests(TestCase):
             cidr='203.0.113.0/24', allow_port_scan=True,
             expires_at=timezone.now() - timezone.timedelta(minutes=1),
         )
-        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async') as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1841,7 +1842,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_denied_when_authorization_lacks_port_scan_flag(self):
         make_authorization(cidr='203.0.113.0/24', allow_port_scan=False, allow_exploit=True)
-        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async') as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -1849,7 +1850,7 @@ class TargetScopeAuthorizationTests(TestCase):
     @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
     def test_scan_denied_when_ip_outside_cidr(self):
         make_authorization(cidr='198.51.100.0/24', allow_port_scan=True, allow_exploit=True)
-        with mock.patch('app_kamerka.views.scan_task.delay') as mocked_scan:
+        with mock.patch('app_kamerka.views.scan_task.apply_async') as mocked_scan:
             response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
         self.assertEqual(response.status_code, 403)
         mocked_scan.assert_not_called()
@@ -2007,6 +2008,14 @@ class NetModuleTests(TestCase):
         self.assertEqual(kwargs['timeout'], ACTIVE_TIMEOUT)
         self.assertEqual(kwargs['headers']['User-Agent'], client.user_agent)
         self.assertTrue(kwargs['verify'])
+        self.assertFalse(kwargs['allow_redirects'])
+
+    def test_active_client_rejects_redirect_following(self):
+        client = ActiveClient()
+        with mock.patch('app_kamerka.net.requests.request') as mocked:
+            with self.assertRaisesRegex(ValueError, 'does not follow redirects'):
+                client.get('http://10.0.0.5:80/status', allow_redirects=True)
+        mocked.assert_not_called()
 
     def test_active_client_does_not_retry_on_error(self):
         client = ActiveClient()
@@ -2037,6 +2046,24 @@ class NetModuleTests(TestCase):
 
         _, kwargs = mocked.call_args
         self.assertTrue(kwargs['verify'])
+
+    def test_active_client_streams_and_caps_response_bytes(self):
+        client = ActiveClient(max_response_bytes=16)
+        response = _fake_response(b'x' * 40)
+        with mock.patch('app_kamerka.net.requests.request', return_value=response) as mocked:
+            with self.assertRaises(ResponseTooLarge):
+                client.get('http://10.0.0.5:80/large')
+        self.assertTrue(mocked.call_args.kwargs['stream'])
+        response.raw.close.assert_called_once()
+
+    def test_active_client_enforces_total_response_duration(self):
+        client = ActiveClient(max_duration=1)
+        response = _fake_response(b'{}')
+        with mock.patch('app_kamerka.net.requests.request', return_value=response):
+            with mock.patch('app_kamerka.net.time.monotonic', side_effect=[0, 2]):
+                with self.assertRaises(requests.exceptions.Timeout):
+                    client.get('http://10.0.0.5:80/slow')
+        response.raw.close.assert_called_once()
 
 
 class PassiveCallSitesUseSharedClientTests(TestCase):
@@ -2394,6 +2421,7 @@ class LegacyJsonFieldMigrationConversionTests(TestCase):
         self.assertEqual(self.parse_dict_like("['not', 'a', 'dict']"), {})
 
 
+@override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True, KAMERKA_ENABLE_EXPLOITATION=True)
 class ScanExploitTaskTests(TestCase):
     """Direct tests of the scan_task/exploit_task Celery task functions
     (kamerka/tasks.py), with Nmap and the exploit probes mocked out -- no
@@ -2405,6 +2433,18 @@ class ScanExploitTaskTests(TestCase):
 
     def setUp(self):
         self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.actor = make_user('active_task_actor', superuser=True)
+        self.authorization = make_authorization()
+
+    def _worker_context(self, device, kind):
+        operation = Operation.objects.create(
+            kind=kind, actor=self.actor, device=device, authorization_id=self.authorization.pk,
+            target_ip=device.ip, target_port=device.port, target_type=device.type,
+        )
+        context = dict(operation_id=str(operation.pk), authorization_id=self.authorization.pk,
+                    actor_id=self.actor.pk, expected_ip=device.ip, expected_port=device.port,
+                    expected_type=device.type)
+        return operation, context
 
     def _fake_nmap(self, stdout):
         instance = mock.Mock()
@@ -2425,10 +2465,15 @@ class ScanExploitTaskTests(TestCase):
             b'</port></ports></host></nmaprun>'
         )
         with mock.patch.object(tasks, 'NmapProcess', self._fake_nmap(xml)) as mocked_cls:
-            result = tasks.scan_task(device.id)
+            operation, context = self._worker_context(device, 'scan')
+            result = tasks.scan_task(device.id, **context)
 
         mocked_cls.assert_called_once()
         self.assertEqual(result, {'State': 'open', 'Reason': 'syn-ack'})
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'succeeded')
+        self.assertIsNotNone(operation.started_at)
+        self.assertIsNotNone(operation.finished_at)
         device.refresh_from_db()
         self.assertEqual(device.scan, {'State': 'open', 'Reason': 'syn-ack'})
         self.assertTrue(device.exploited_scanned)
@@ -2445,7 +2490,8 @@ class ScanExploitTaskTests(TestCase):
             b'</port></ports></host></nmaprun>'
         )
         with mock.patch.object(tasks, 'NmapProcess', self._fake_nmap(xml)) as mocked_cls:
-            result = tasks.scan_task(device.id)
+            operation, context = self._worker_context(device, 'scan')
+            result = tasks.scan_task(device.id, **context)
 
         mocked_cls.assert_called_once()
         self.assertEqual(result, {'ID': 'modbus-discover', 'Output': 'Slave ID data: 1'})
@@ -2463,7 +2509,8 @@ class ScanExploitTaskTests(TestCase):
         device = Device.objects.create(
             search=self.search, ip='10.0.0.22', port='80', type='some_unhandled_type', category='ipcam',
         )
-        result = tasks.exploit_task(device.id)
+        _operation, context = self._worker_context(device, 'exploit')
+        result = tasks.exploit_task(device.id, **context)
         self.assertEqual(result, {'Reason': 'No exploit assigned'})
 
     def test_exploit_task_dispatches_to_matching_exploit_and_persists(self):
@@ -2484,10 +2531,153 @@ class ScanExploitTaskTests(TestCase):
             return {'Success': 'lutron config retrieved'}
 
         with mock.patch.object(tasks.exploits, 'lutron', side_effect=fake_lutron) as mocked_lutron:
-            result = tasks.exploit_task(device.id)
+            operation, context = self._worker_context(device, 'exploit')
+            result = tasks.exploit_task(device.id, **context)
 
         mocked_lutron.assert_called_once()
         self.assertEqual(result, {'Success': 'lutron config retrieved'})
         device.refresh_from_db()
         self.assertEqual(device.exploit, {'Success': 'lutron config retrieved'})
         self.assertTrue(device.exploited_scanned)
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'succeeded')
+
+    def test_worker_direct_invocation_without_context_is_blocked(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.24', port='80', type='hikvision', category='ipcam',
+        )
+        with mock.patch.object(tasks, 'NmapProcess') as nmap:
+            result = tasks.scan_task(device.id)
+        self.assertEqual(result, {'Error': 'Active operation blocked'})
+        nmap.assert_not_called()
+        self.assertEqual(Operation.objects.get(kind='scan').status, 'blocked')
+
+    def test_worker_blocks_revoked_pinned_authorization(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.25', port='80', type='hikvision', category='ipcam',
+        )
+        operation, context = self._worker_context(device, 'scan')
+        self.authorization.delete()
+        with mock.patch.object(tasks, 'NmapProcess') as nmap:
+            result = tasks.scan_task(device.id, **context)
+        self.assertEqual(result, {'Error': 'Active operation blocked'})
+        nmap.assert_not_called()
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'blocked')
+
+    def test_worker_blocks_expired_pinned_authorization(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.26', port='80', type='hikvision', category='ipcam',
+        )
+        operation, context = self._worker_context(device, 'scan')
+        self.authorization.expires_at = timezone.now() - timezone.timedelta(seconds=1)
+        self.authorization.save(update_fields=['expires_at'])
+        with mock.patch.object(tasks, 'NmapProcess') as nmap:
+            result = tasks.scan_task(device.id, **context)
+        self.assertEqual(result, {'Error': 'Active operation blocked'})
+        nmap.assert_not_called()
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'blocked')
+
+    def test_worker_blocks_target_mutation_after_enqueue(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.27', port='80', type='hikvision', category='ipcam',
+        )
+        operation, context = self._worker_context(device, 'scan')
+        device.ip = '10.0.0.28'
+        device.save(update_fields=['ip'])
+        with mock.patch.object(tasks, 'NmapProcess') as nmap:
+            result = tasks.scan_task(device.id, **context)
+        self.assertEqual(result, {'Error': 'Active operation blocked'})
+        nmap.assert_not_called()
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'blocked')
+
+    def test_worker_blocks_actor_after_capability_revocation(self):
+        actor = make_user('revoked_task_actor', groups=['Active Scanner'])
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.30', port='80', type='hikvision', category='ipcam',
+        )
+        operation = Operation.objects.create(
+            kind='scan', actor=actor, device=device, authorization_id=self.authorization.pk,
+            target_ip=device.ip, target_port=device.port, target_type=device.type,
+        )
+        context = dict(operation_id=str(operation.pk), authorization_id=self.authorization.pk,
+                       actor_id=actor.pk, expected_ip=device.ip, expected_port=device.port,
+                       expected_type=device.type)
+        actor.groups.clear()
+        with mock.patch.object(tasks, 'NmapProcess') as nmap:
+            result = tasks.scan_task(device.id, **context)
+        self.assertEqual(result, {'Error': 'Active operation blocked'})
+        nmap.assert_not_called()
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'blocked')
+
+    def test_worker_blocks_when_feature_flag_is_disabled_after_enqueue(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.31', port='80', type='hikvision', category='ipcam',
+        )
+        operation, context = self._worker_context(device, 'scan')
+        with override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=False):
+            with mock.patch.object(tasks, 'NmapProcess') as nmap:
+                result = tasks.scan_task(device.id, **context)
+        self.assertEqual(result, {'Error': 'Active operation blocked'})
+        nmap.assert_not_called()
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'blocked')
+
+    def test_worker_blocks_when_pinned_authorization_flags_change(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.32', port='80', type='hikvision', category='ipcam',
+        )
+        operation, context = self._worker_context(device, 'scan')
+        self.authorization.allow_port_scan = False
+        self.authorization.save(update_fields=['allow_port_scan'])
+        with mock.patch.object(tasks, 'NmapProcess') as nmap:
+            result = tasks.scan_task(device.id, **context)
+        self.assertEqual(result, {'Error': 'Active operation blocked'})
+        nmap.assert_not_called()
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'blocked')
+
+    def test_worker_blocks_when_pinned_authorization_cidr_changes(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.33', port='80', type='hikvision', category='ipcam',
+        )
+        operation, context = self._worker_context(device, 'scan')
+        self.authorization.cidr = '192.0.2.0/24'
+        self.authorization.save(update_fields=['cidr'])
+        with mock.patch.object(tasks, 'NmapProcess') as nmap:
+            result = tasks.scan_task(device.id, **context)
+        self.assertEqual(result, {'Error': 'Active operation blocked'})
+        nmap.assert_not_called()
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'blocked')
+
+    def test_duplicate_task_does_not_repeat_network_or_overwrite_outcome(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.34', port='80', type='hikvision', category='ipcam',
+        )
+        operation, context = self._worker_context(device, 'scan')
+        xml = b'<nmaprun><host><ports><port><state state="open" reason="syn-ack"/></port></ports></host></nmaprun>'
+        with mock.patch.object(tasks, 'NmapProcess', self._fake_nmap(xml)) as nmap:
+            first = tasks.scan_task(device.id, **context)
+            second = tasks.scan_task(device.id, **context)
+        self.assertEqual(first, {'State': 'open', 'Reason': 'syn-ack'})
+        self.assertEqual(second, {'Error': 'Active operation blocked'})
+        nmap.assert_called_once()
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'succeeded')
+
+    def test_worker_failure_is_persisted_and_audited(self):
+        device = Device.objects.create(
+            search=self.search, ip='10.0.0.29', port='80', type='hikvision', category='ipcam',
+        )
+        operation, context = self._worker_context(device, 'scan')
+        with mock.patch.object(tasks, 'NmapProcess', side_effect=RuntimeError('nmap failed')):
+            with self.assertRaisesRegex(RuntimeError, 'nmap failed'):
+                tasks.scan_task(device.id, **context)
+        operation.refresh_from_db()
+        self.assertEqual(operation.status, 'failed')
+        self.assertIn('nmap failed', operation.error)
+        self.assertFalse(AuditLog.objects.filter(action='scan', success=True).exists())
