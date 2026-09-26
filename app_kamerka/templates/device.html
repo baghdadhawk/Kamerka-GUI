@@ -406,12 +406,12 @@
                                 </div>
                                 <div class="panel-body padding-2">
                                     <br>
-                                    {% if active_scan_enabled %}
+                                    {% if can_scan %}
                                     <center><button type="button" id="scan" class="btn btn-primary active">Scan {{ device.type }} </button></center>
                                     {% else %}
                                     <center>
                                         <button type="button" id="scan" class="btn btn-primary active" disabled>Scan {{ device.type }} </button>
-                                        <br><small>Disabled by configuration (KAMERKA_ENABLE_ACTIVE_SCAN)</small>
+                                        <br><small>{{ scan_disabled_reason }}</small>
                                     </center>
                                     {% endif %}
                                     <pre><code id=scan_results></code></pre>
@@ -436,12 +436,12 @@
                                 </div>
                                     <div class="panel-body padding-2">
                                     <br>
-                                    {% if exploitation_enabled %}
+                                    {% if can_exploit %}
                                     <center><button type="button" id="exploit" class="btn btn-primary active"> Exploit </button></center>
                                     {% else %}
                                     <center>
                                         <button type="button" id="exploit" class="btn btn-primary active" disabled> Exploit </button>
-                                        <br><small>Disabled by configuration (KAMERKA_ENABLE_EXPLOITATION)</small>
+                                        <br><small>{{ exploit_disabled_reason }}</small>
                                     </center>
                                     {% endif %}
                                     <pre><code id=exploit_results></code></pre>

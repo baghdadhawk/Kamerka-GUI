@@ -20,6 +20,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from app_kamerka import forms
 from app_kamerka.models import Search, Device, DeviceNearby, ShodanScan, BinaryEdgeScore, Whois, \
     Bosch, AuditLog
+from app_kamerka.authz import require_capability, is_target_authorized
 from django.conf import settings
 from kamerka.tasks import shodan_search, devices_nearby, shodan_scan_task, \
     binary_edge_scan, whoisxml, check_credits, nmap_scan, validate_nmap, validate_maxmind, scan, \
@@ -147,6 +148,7 @@ def get_keys():
 keys = get_keys()
 
 
+@require_capability('run_search', methods={'POST'})
 def search_main(request):
     if request.method == 'POST':
 
@@ -553,6 +555,7 @@ EXPORT_FIELDS = [
 ]
 
 
+@require_capability('run_search')
 def export_devices(request):
     """Stream the SAME filtered device list as `devices()` (via
     filter_devices(), so the two views can't drift) as a CSV or JSON
@@ -710,6 +713,7 @@ def history(request):
     return render(request, 'history.html', context)
 
 
+@require_capability('run_search', methods={'POST'})
 def update_coordinates(request,id, coordinates):
     if request.method != 'POST':
         return method_not_allowed()
@@ -825,6 +829,32 @@ def device(request, id, device_id, ip):
     # wiring for this comes in a later batch; the data is ready here.
     sightings = other_sightings(all_devices)
 
+    # Cheap UI reflection of the S4 capability + target-scope gates (the
+    # actual enforcement lives in scan_dev/exploit_dev; this only decides
+    # whether the buttons render enabled, and why not when they don't).
+    can_active_scan = request.user.has_perm('app_kamerka.active_scan')
+    can_exploit_cap = request.user.has_perm('app_kamerka.exploit')
+    scan_scope_ok = is_target_authorized(all_devices.ip, 'port_scan')
+    exploit_scope_ok = is_target_authorized(all_devices.ip, 'exploit')
+
+    if not settings.KAMERKA_ENABLE_ACTIVE_SCAN:
+        scan_disabled_reason = "Disabled by configuration (KAMERKA_ENABLE_ACTIVE_SCAN)"
+    elif not can_active_scan:
+        scan_disabled_reason = "Your role does not include active scanning"
+    elif not scan_scope_ok:
+        scan_disabled_reason = "Target is not within an authorized scan scope"
+    else:
+        scan_disabled_reason = None
+
+    if not settings.KAMERKA_ENABLE_EXPLOITATION:
+        exploit_disabled_reason = "Disabled by configuration (KAMERKA_ENABLE_EXPLOITATION)"
+    elif not can_exploit_cap:
+        exploit_disabled_reason = "Your role does not include exploitation"
+    elif not exploit_scope_ok:
+        exploit_disabled_reason = "Target is not within an authorized exploit scope"
+    else:
+        exploit_disabled_reason = None
+
     context = {'device': all_devices,
                'nearby': nearby,
                "shodan": shodan,
@@ -839,11 +869,16 @@ def device(request, id, device_id, ip):
                "sightings_count": sightings.count(),
                "status_choices": Device.STATUS_CHOICES,
                "active_scan_enabled": settings.KAMERKA_ENABLE_ACTIVE_SCAN,
-               "exploitation_enabled": settings.KAMERKA_ENABLE_EXPLOITATION}
+               "exploitation_enabled": settings.KAMERKA_ENABLE_EXPLOITATION,
+               "can_scan": scan_disabled_reason is None,
+               "scan_disabled_reason": scan_disabled_reason,
+               "can_exploit": exploit_disabled_reason is None,
+               "exploit_disabled_reason": exploit_disabled_reason}
 
     return render(request, 'device.html', context)
 
 
+@require_capability('run_search', methods={'POST'})
 def nearby(request, id, query):
     if request.method != 'POST':
         return method_not_allowed()
@@ -860,6 +895,7 @@ def sources(request):
     return render(request, 'sources.html', {})
 
 
+@require_capability('run_search', methods={'POST'})
 def shodan_scan(request, id):
     if request.method != 'POST':
         return method_not_allowed()
@@ -919,6 +955,7 @@ def get_nearby_devices(request, id):
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
+@require_capability('active_scan', methods={'POST'})
 def scan_dev(request, id):
     if request.method != 'POST':
         return method_not_allowed()
@@ -926,6 +963,17 @@ def scan_dev(request, id):
         if not settings.KAMERKA_ENABLE_ACTIVE_SCAN:
             return HttpResponse(
                 json.dumps({'Error': "Active scanning is disabled"}),
+                content_type='application/json', status=403,
+            )
+        device_obj = _get_device_or_none(id)
+        target_ip = device_obj.ip if device_obj else None
+        if not is_target_authorized(target_ip, 'port_scan'):
+            record_audit(
+                request, 'scope_denied', device=device_obj, target=str(id),
+                detail='target not within an authorized scan scope', success=False,
+            )
+            return HttpResponse(
+                json.dumps({'Error': "target not within an authorized scan scope"}),
                 content_type='application/json', status=403,
             )
         res = scan(id)
@@ -939,6 +987,7 @@ def scan_dev(request, id):
     else:
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
+@require_capability('exploit', methods={'POST'})
 def exploit_dev(request, id):
     if request.method != 'POST':
         return method_not_allowed()
@@ -946,6 +995,17 @@ def exploit_dev(request, id):
         if not settings.KAMERKA_ENABLE_EXPLOITATION:
             return HttpResponse(
                 json.dumps({'Error': "Exploitation is disabled"}),
+                content_type='application/json', status=403,
+            )
+        device_obj = _get_device_or_none(id)
+        target_ip = device_obj.ip if device_obj else None
+        if not is_target_authorized(target_ip, 'exploit'):
+            record_audit(
+                request, 'scope_denied', device=device_obj, target=str(id),
+                detail='target not within an authorized exploit scope', success=False,
+            )
+            return HttpResponse(
+                json.dumps({'Error': "target not within an authorized exploit scope"}),
                 content_type='application/json', status=403,
             )
         res = exploit(id)
@@ -965,6 +1025,7 @@ def exploit_dev(request, id):
 # implementation so there is only one place to fix bugs in.
 get_nearby_devices_coordinates = get_nearby_devices
 
+@require_capability('run_search', methods={'POST'})
 def send_to_field_agent(request, id, notes):
     """Persist a Device's notes locally. Kept under its original name/URL
     since the device page's "Save notes" UI already posts here; it no
@@ -985,6 +1046,7 @@ def send_to_field_agent(request, id, notes):
         return HttpResponse(json.dumps({'task_id': None}), content_type='application/json', status=400)
 
 
+@require_capability('run_search', methods={'POST'})
 def get_binaryedge_score(request, id):
     if request.method != 'POST':
         return method_not_allowed()
@@ -1015,6 +1077,7 @@ def get_binaryedge_score_results(request, id):
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
+@require_capability('run_search', methods={'POST'})
 def whois(request, id):
     if request.method != 'POST':
         return method_not_allowed()
@@ -1034,6 +1097,7 @@ def whois(request, id):
         return HttpResponse(json.dumps({'task_id': None}), content_type='application/json', status=400)
 
 
+@require_capability('run_search', methods={'POST'})
 def get_honeyscore(request, id):
     """On-demand Shodan HoneyScore check (the 2nd, network-based honeypot
     signal, complementing the automatic local heuristic in honeypot_score).
@@ -1066,6 +1130,7 @@ def get_whois(request, id):
         return HttpResponse(json.dumps({'Error': "Bad request"}), content_type='application/json', status=400)
 
 
+@require_capability('run_search', methods={'POST'})
 def set_device_status(request, id):
     """AJAX endpoint to set a Device's manual triage status (see
     Device.STATUS_CHOICES). Requires POST (`status` param) -- this mutates

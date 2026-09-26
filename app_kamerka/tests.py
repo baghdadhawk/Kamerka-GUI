@@ -4,12 +4,15 @@ from unittest import mock
 
 import requests
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.test import TestCase, Client, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
+from app_kamerka.authz import is_target_authorized
 from app_kamerka.banner_utils import looks_like_generic_http_response
 from app_kamerka.honeypot import score_device, HONEYPOT_THRESHOLD
-from app_kamerka.models import AuditLog, Device, Search
+from app_kamerka.models import AuditLog, Device, ScanAuthorization, Search
 from app_kamerka.net import (
     ActiveClient,
     ACTIVE_TIMEOUT,
@@ -25,6 +28,32 @@ User = get_user_model()
 
 
 AJAX_HEADER = {'HTTP_X_REQUESTED_WITH': 'XMLHttpRequest'}
+
+
+def make_user(username, groups=(), password='pw12345', superuser=False):
+    """Test helper: create a user, optionally a superuser, and add it to
+    zero or more of the Viewer/Analyst/Active Scanner/Exploit Operator/
+    Administrator groups created by the 0007_capability_groups data
+    migration (so this also exercises that migration's group/permission
+    wiring, not just hand-rolled permissions)."""
+    if superuser:
+        user = User.objects.create_superuser(
+            username=username, email='%s@example.invalid' % username, password=password,
+        )
+    else:
+        user = User.objects.create_user(username=username, password=password)
+    for group_name in groups:
+        user.groups.add(Group.objects.get(name=group_name))
+    return user
+
+
+def make_authorization(cidr='0.0.0.0/0', allow_port_scan=True, allow_exploit=True,
+                        expires_at=None, name='test scope'):
+    """Test helper: create a ScanAuthorization row covering `cidr`."""
+    return ScanAuthorization.objects.create(
+        name=name, cidr=cidr, allow_port_scan=allow_port_scan, allow_exploit=allow_exploit,
+        expires_at=expires_at,
+    )
 
 
 class IsAjaxHelperTests(TestCase):
@@ -584,7 +613,7 @@ class HoneyscoreViewTests(TestCase):
     network involved."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.user = make_user('tester', groups=['Analyst'])
         self.client.force_login(self.user)
         search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
         self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
@@ -768,7 +797,7 @@ class SetDeviceStatusTests(TestCase):
     mirroring the whois/get_binaryedge_score pattern."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='status_tester', password='pw12345')
+        self.user = make_user('status_tester', groups=['Analyst'])
         self.client.force_login(self.user)
         search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
         self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
@@ -910,7 +939,7 @@ class ExportDevicesViewTests(TestCase):
     (they share filter_devices()), as CSV (default) or JSON."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='export_tester', password='pw12345')
+        self.user = make_user('export_tester', groups=['Analyst'])
         self.client.force_login(self.user)
 
         self.search1 = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
@@ -1208,7 +1237,7 @@ class DeviceTriagePageTests(TestCase):
     control built from Device.STATUS_CHOICES and an other-sightings list."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='triage_tester', password='pw12345')
+        self.user = make_user('triage_tester', groups=['Analyst'])
         self.client.force_login(self.user)
         self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
 
@@ -1274,7 +1303,7 @@ class PastebinRemovalTests(TestCase):
     entirely. send_to_field_agent now only persists notes locally."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.user = make_user('tester', groups=['Analyst'])
         self.client.force_login(self.user)
 
         self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
@@ -1320,11 +1349,18 @@ class PastebinRemovalTests(TestCase):
 
 class ActiveOpsFeatureFlagTests(TestCase):
     """scan_dev/exploit_dev are gated behind KAMERKA_ENABLE_ACTIVE_SCAN /
-    KAMERKA_ENABLE_EXPLOITATION, both False by default."""
+    KAMERKA_ENABLE_EXPLOITATION, both False by default. This class is only
+    about that feature-flag gate (capability and target-scope authorization
+    are covered separately by CapabilityRoleTests/TargetScopeAuthorizationTests
+    below), so the caller here is a superuser with a scope covering every
+    IPv4 address -- both the active_scan/exploit capability check and the
+    is_target_authorized() scope check are satisfied unconditionally,
+    leaving only the feature flag itself under test."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='tester', password='pw12345')
+        self.user = make_user('tester', superuser=True)
         self.client.force_login(self.user)
+        make_authorization(cidr='0.0.0.0/0', allow_port_scan=True, allow_exploit=True)
 
         self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
         self.device = Device.objects.create(search=self.search, ip='5.5.5.5', type='modbus', category='ics')
@@ -1396,6 +1432,349 @@ class ActiveOpsFeatureFlagTests(TestCase):
         self.assertEqual(row.action, 'exploit')
         self.assertEqual(row.device_id, self.device.id)
         self.assertTrue(row.success)
+
+
+class CapabilityGroupMigrationTests(TestCase):
+    """0007_capability_groups must actually create the five groups with the
+    right cumulative custom permissions (app_kamerka.<capability> on the
+    Device content type -- see Device.Meta.permissions)."""
+
+    def test_groups_exist_with_cumulative_permissions(self):
+        expected = {
+            'Viewer': {'view_capability'},
+            'Analyst': {'view_capability', 'run_search'},
+            'Active Scanner': {'view_capability', 'run_search', 'active_scan'},
+            'Exploit Operator': {'view_capability', 'run_search', 'active_scan', 'exploit'},
+            'Administrator': {'view_capability', 'run_search', 'active_scan', 'exploit', 'administer'},
+        }
+        for group_name, expected_codenames in expected.items():
+            group = Group.objects.get(name=group_name)
+            codenames = {p.codename for p in group.permissions.all()}
+            self.assertEqual(codenames, expected_codenames, group_name)
+
+
+class CapabilityRoleTests(TestCase):
+    """Capability-based role enforcement (S4): a Viewer can only reach the
+    read-only pages, an Analyst additionally reaches run_search/enrichment
+    endpoints, an Active Scanner additionally reaches scan_dev (given an
+    authorized scope), an Exploit Operator additionally reaches exploit_dev
+    (given an authorized scope), and a superuser passes every check
+    regardless of group membership."""
+
+    def setUp(self):
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=self.search, ip='6.6.6.6', type='modbus', category='ics')
+        # Covers the device's IP for both active operations, so the
+        # capability checks in this class are exercised independently of
+        # target-scope authorization (that is TargetScopeAuthorizationTests'
+        # job).
+        make_authorization(cidr='6.6.6.6/32', allow_port_scan=True, allow_exploit=True)
+
+    def _login(self, username, groups=(), superuser=False):
+        user = make_user(username, groups=groups, superuser=superuser)
+        client = Client()
+        client.force_login(user)
+        return client
+
+    # -- read-only pages: every authenticated user, capability or not ------
+
+    def test_plain_authenticated_user_can_read_pages(self):
+        # Login middleware already requires authentication for every page;
+        # "view" is not gated behind a group, per spec every authenticated
+        # user effectively has it.
+        client = self._login('plain_user')
+        for name, args in (
+            ('index', []), ('devices', []), ('results', [self.search.id]),
+            ('map', []), ('gallery', []), ('history', []), ('sources', []),
+            ('device', [self.device.search_id, self.device.id, self.device.ip]),
+        ):
+            response = client.get(reverse(name, args=args))
+            self.assertEqual(response.status_code, 200, name)
+
+    def test_viewer_gets_200_on_read_pages(self):
+        client = self._login('viewer_user', groups=['Viewer'])
+        response = client.get(reverse('devices'))
+        self.assertEqual(response.status_code, 200)
+        response = client.get(reverse('device', args=[self.device.search_id, self.device.id, self.device.ip]))
+        self.assertEqual(response.status_code, 200)
+
+    # -- Viewer: 403 on run_search/active_scan/exploit ----------------------
+
+    def test_viewer_gets_403_on_run_search_endpoint(self):
+        client = self._login('viewer2', groups=['Viewer'])
+        response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+
+    def test_viewer_gets_403_on_export_devices(self):
+        client = self._login('viewer3', groups=['Viewer'])
+        response = client.get(reverse('export_devices'))
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_viewer_gets_403_on_active_scan_endpoint(self):
+        client = self._login('viewer4', groups=['Viewer'])
+        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_viewer_gets_403_on_exploit_endpoint(self):
+        client = self._login('viewer5', groups=['Viewer'])
+        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    # -- Analyst: run_search/enrichment ok, scan/exploit still 403 ---------
+
+    def test_analyst_can_run_search_and_enrichment(self):
+        client = self._login('analyst1', groups=['Analyst'])
+        with mock.patch('app_kamerka.views.whoisxml.delay', return_value=mock.Mock(id='t1')):
+            response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+
+        response = client.get(reverse('export_devices'))
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_analyst_gets_403_on_active_scan(self):
+        client = self._login('analyst2', groups=['Analyst'])
+        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_analyst_gets_403_on_exploit(self):
+        client = self._login('analyst3', groups=['Analyst'])
+        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    # -- Active Scanner: can scan (with scope), not exploit -----------------
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_active_scanner_can_scan_with_scope(self):
+        client = self._login('scanner1', groups=['Active Scanner'])
+        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}) as mocked_scan:
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_scan.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_active_scanner_gets_403_on_exploit(self):
+        client = self._login('scanner2', groups=['Active Scanner'])
+        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    # -- Exploit Operator: can exploit (with scope) --------------------------
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_operator_can_exploit_with_scope(self):
+        client = self._login('exploiter1', groups=['Exploit Operator'])
+        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}) as mocked_exploit:
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_exploit.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_exploit_operator_can_also_scan_with_scope(self):
+        # Exploit Operator is cumulative: it also holds active_scan.
+        client = self._login('exploiter2', groups=['Exploit Operator'])
+        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}) as mocked_scan:
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_scan.assert_called_once_with(str(self.device.id))
+
+    # -- superuser: passes every check regardless of group ------------------
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True, KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_superuser_passes_all_capability_checks(self):
+        client = self._login('root_user', superuser=True)
+
+        response = client.get(reverse('export_devices'))
+        self.assertEqual(response.status_code, 200)
+
+        with mock.patch('app_kamerka.views.whoisxml.delay', return_value=mock.Mock(id='t2')):
+            response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+
+        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}):
+            response = client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+
+        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}):
+            response = client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+
+    def test_capability_denial_creates_audit_log_row(self):
+        client = self._login('viewer6', groups=['Viewer'])
+        response = client.post(reverse('whois', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'capability_denied')
+        self.assertFalse(row.success)
+
+
+class TargetScopeAuthorizationTests(TestCase):
+    """Target-scope authorization (S4): active_scan/exploit capability
+    alone is not enough for scan_dev/exploit_dev -- the device's IP must
+    also fall within a non-expired ScanAuthorization row with the matching
+    allow_* flag."""
+
+    def setUp(self):
+        self.search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
+        self.device = Device.objects.create(search=self.search, ip='203.0.113.7', type='modbus', category='ics')
+
+        self.scanner = make_user('scoped_scanner', groups=['Active Scanner'])
+        self.exploiter = make_user('scoped_exploiter', groups=['Exploit Operator'])
+        self.scanner_client = Client()
+        self.scanner_client.force_login(self.scanner)
+        self.exploiter_client = Client()
+        self.exploiter_client.force_login(self.exploiter)
+
+    # -- is_target_authorized() unit-level checks ---------------------------
+
+    def test_is_target_authorized_true_for_in_scope_ip(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
+        self.assertTrue(is_target_authorized('203.0.113.7', 'port_scan'))
+        self.assertFalse(is_target_authorized('203.0.113.7', 'exploit'))
+
+    def test_is_target_authorized_false_for_out_of_scope_ip(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=True)
+        self.assertFalse(is_target_authorized('198.51.100.7', 'port_scan'))
+
+    def test_is_target_authorized_false_when_expired(self):
+        make_authorization(
+            cidr='203.0.113.0/24', allow_port_scan=True,
+            expires_at=timezone.now() - timezone.timedelta(days=1),
+        )
+        self.assertFalse(is_target_authorized('203.0.113.7', 'port_scan'))
+
+    def test_is_target_authorized_true_when_expires_in_future(self):
+        make_authorization(
+            cidr='203.0.113.0/24', allow_port_scan=True,
+            expires_at=timezone.now() + timezone.timedelta(days=1),
+        )
+        self.assertTrue(is_target_authorized('203.0.113.7', 'port_scan'))
+
+    def test_is_target_authorized_false_without_any_scope(self):
+        self.assertFalse(is_target_authorized('203.0.113.7', 'port_scan'))
+
+    # -- scan_dev end-to-end --------------------------------------------------
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_denied_with_no_authorization(self):
+        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('scope', response.json()['Error'].lower())
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_succeeds_with_in_scope_authorization(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
+        with mock.patch('app_kamerka.views.scan', return_value={'State': 'open'}) as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_scan.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_denied_when_authorization_expired(self):
+        make_authorization(
+            cidr='203.0.113.0/24', allow_port_scan=True,
+            expires_at=timezone.now() - timezone.timedelta(minutes=1),
+        )
+        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_denied_when_authorization_lacks_port_scan_flag(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=False, allow_exploit=True)
+        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_denied_when_ip_outside_cidr(self):
+        make_authorization(cidr='198.51.100.0/24', allow_port_scan=True, allow_exploit=True)
+        with mock.patch('app_kamerka.views.scan') as mocked_scan:
+            response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_scan.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_ACTIVE_SCAN=True)
+    def test_scan_scope_denial_creates_audit_log_row(self):
+        response = self.scanner_client.post(reverse('scan', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'scope_denied')
+        self.assertFalse(row.success)
+        self.assertEqual(row.device_id, self.device.id)
+
+    # -- exploit_dev end-to-end -----------------------------------------------
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_denied_with_no_authorization(self):
+        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('scope', response.json()['Error'].lower())
+        mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_succeeds_with_in_scope_authorization(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=False, allow_exploit=True)
+        with mock.patch('app_kamerka.views.exploit', return_value={'Success': 'done'}) as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 200)
+        mocked_exploit.assert_called_once_with(str(self.device.id))
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_denied_when_authorization_expired(self):
+        make_authorization(
+            cidr='203.0.113.0/24', allow_exploit=True,
+            expires_at=timezone.now() - timezone.timedelta(minutes=1),
+        )
+        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_denied_when_authorization_lacks_exploit_flag(self):
+        make_authorization(cidr='203.0.113.0/24', allow_port_scan=True, allow_exploit=False)
+        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_denied_when_ip_outside_cidr(self):
+        make_authorization(cidr='198.51.100.0/24', allow_port_scan=True, allow_exploit=True)
+        with mock.patch('app_kamerka.views.exploit') as mocked_exploit:
+            response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        mocked_exploit.assert_not_called()
+
+    @override_settings(KAMERKA_ENABLE_EXPLOITATION=True)
+    def test_exploit_scope_denial_creates_audit_log_row(self):
+        response = self.exploiter_client.post(reverse('exploit', args=[self.device.id]), **AJAX_HEADER)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(AuditLog.objects.count(), 1)
+        row = AuditLog.objects.get()
+        self.assertEqual(row.action, 'scope_denied')
+        self.assertFalse(row.success)
+        self.assertEqual(row.device_id, self.device.id)
 
 
 def _fake_response(body=b'{}', status_code=200, chunk_size=8):
@@ -1583,7 +1962,7 @@ class SideEffectingEndpointsPostOnlyTests(TestCase):
     involved."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='postonly_tester', password='pw12345')
+        self.user = make_user('postonly_tester', groups=['Analyst'])
         self.client.force_login(self.user)
         search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
         self.device = Device.objects.create(
@@ -1719,7 +2098,7 @@ class CsrfProtectionTests(TestCase):
     call/celery task involved) as the representative endpoint."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='csrf_tester', password='pw12345')
+        self.user = make_user('csrf_tester', groups=['Analyst'])
         search = Search.objects.create(country='US', ics='modbus', coordinates='', coordinates_search='')
         self.device = Device.objects.create(search=search, ip='1.2.3.4', type='modbus', category='ics')
 

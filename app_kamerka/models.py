@@ -61,6 +61,24 @@ class Device(models.Model):
     # Manual operator triage status (see STATUS_CHOICES above).
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='new')
 
+    class Meta:
+        # Capability-based roles (see app_kamerka.authz.require_capability and
+        # the Viewer/Analyst/Active Scanner/Exploit Operator/Administrator
+        # groups created by the 000x_capability_groups data migration).
+        # These are plain custom Django permissions -- not tied to any
+        # particular Device instance -- hung off this model only because
+        # every custom permission needs *some* model to live on and Device
+        # is the app's central one. A superuser holds all of them implicitly
+        # (django.contrib.auth's ModelBackend.has_perm short-circuits to True
+        # for is_superuser).
+        permissions = [
+            ('view_capability', 'Can view read-only pages and passive lookups'),
+            ('run_search', 'Can run passive Shodan searches and enrichment/triage/export'),
+            ('active_scan', 'Can run active Nmap scans'),
+            ('exploit', 'Can run exploitation modules'),
+            ('administer', 'Can administer scan scopes and users'),
+        ]
+
 class DeviceNearby(models.Model):
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
     lat = models.CharField(max_length=100)
@@ -111,6 +129,41 @@ class Dnp3(models.Model):
     control = models.CharField(max_length=100)
 
 
+class ScanAuthorization(models.Model):
+    """An explicit engagement/authorization scope for ACTIVE operations
+    (Nmap scanning, exploitation). A device discovered via passive Shodan
+    search can only be scanned/exploited if its IP falls within some
+    non-expired row here with the matching allow_* flag set -- see
+    app_kamerka.authz.is_target_authorized(). Administrators create these
+    via the Django admin (see app_kamerka/admin.py)."""
+
+    name = models.CharField(max_length=200, help_text="Short label, e.g. the engagement name.")
+    reference = models.CharField(
+        max_length=200, blank=True, default="",
+        help_text="Optional reference, e.g. an incident/engagement ticket id.",
+    )
+    cidr = models.CharField(
+        max_length=100,
+        help_text="An IPv4/IPv6 network (e.g. 203.0.113.0/24) or a single host (e.g. 203.0.113.5).",
+    )
+    allow_port_scan = models.BooleanField(default=False, help_text="Authorizes active Nmap scanning.")
+    allow_exploit = models.BooleanField(default=False, help_text="Authorizes exploitation attempts.")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Leave blank for a scope that never expires.",
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return "%s (%s)" % (self.name, self.cidr)
+
+
 class AuditLog(models.Model):
     """Audit trail for sensitive/side-effecting operations (active scanning,
     exploitation, third-party enrichment lookups, and triage-affecting
@@ -129,6 +182,8 @@ class AuditLog(models.Model):
         ('binaryedge', 'BinaryEdge score lookup'),
         ('nearby', 'Nearby devices search'),
         ('notes', 'Notes update'),
+        ('capability_denied', 'Capability denied'),
+        ('scope_denied', 'Target scope denied'),
     ]
 
     user = models.ForeignKey(
